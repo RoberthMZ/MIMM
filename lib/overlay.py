@@ -246,6 +246,12 @@ class WelcomeMessageWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setGeometry(QApplication.primaryScreen().geometry())
 
+    def __init__(self, translator, manager):
+        super().__init__()
+        self.translator = translator
+        self.manager = manager
+        self.setup_ui()
+
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
@@ -267,7 +273,7 @@ class WelcomeMessageWidget(QWidget):
         painter.setClipping(False) 
         icon_center_x = panel_x + accent_width / 2
         icon_center_y = panel_y + accent_width / 2
-        emphasis_color = QColor("#00aaff")
+        emphasis_color = self.manager.palette().color(self.manager.palette().ColorRole.Highlight)
         painter.setPen(QPen(emphasis_color, 3)) 
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(icon_center_x, icon_center_y), 20, 20)
@@ -280,7 +286,7 @@ class WelcomeMessageWidget(QWidget):
         content_width = panel_width - accent_width - 60
         title_font = QFont("Segoe UI", 24, QFont.Weight.Bold)
         painter.setFont(title_font)
-        painter.setPen(QColor("#00aaff")) 
+        painter.setPen(emphasis_color) 
         title_rect = QRectF(content_x, panel_y + 30, content_width, 50)
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.translator.translate("welcome_title"))
         body_font = QFont("Segoe UI", 14)
@@ -479,6 +485,7 @@ class OverlayWindow(QWidget):
         font = QFont("Segoe UI", 16, QFont.Weight.Bold)
         painter.setFont(font)
         fm = QFontMetrics(font)
+        highlight_color = self.controller.manager.palette().color(self.controller.manager.palette().ColorRole.Highlight)
         translated_categories = [self.translator.translate(self.game_data_structure[self.game_name]['categories'][cat_key]['t_key']) for cat_key in self.categories]
         category_spacing = 20
         total_width = sum(fm.horizontalAdvance(cat) + 40 for cat in translated_categories) + (len(translated_categories) - 1) * category_spacing
@@ -490,7 +497,10 @@ class OverlayWindow(QWidget):
             rect = QRectF(x, y, text_width + 40, 50)
             self.category_rects.append(rect)
             if is_selected:
-                painter.setPen(QColor("#00aaff")); painter.setBrush(QColor(0, 170, 255, 50))
+                painter.setPen(highlight_color)
+                bg_color = QColor(highlight_color)
+                bg_color.setAlpha(50)
+                painter.setBrush(bg_color)
             else:
                 painter.setPen(QColor(200, 200, 200)); painter.setBrush(Qt.BrushStyle.NoBrush)
             path = QPainterPath(); path.addRoundedRect(rect, 15, 15); painter.drawPath(path)
@@ -546,6 +556,7 @@ class OverlayWindow(QWidget):
         content_rect = QRectF(0, self.height() * 0.2, self.width(), self.height() * 0.8)
         center, radius = content_rect.center(), min(content_rect.width(), content_rect.height()) * 0.30
         icon_size, selected_icon_size, angle_step = 110, 140, 360.0 / PROFILES_PER_PAGE
+        highlight_color = self.controller.manager.palette().color(self.controller.manager.palette().ColorRole.Highlight)
         
         for i, profile in enumerate(self.profiles_on_page):
             is_selected = (i == self.selected_profile_index)
@@ -582,7 +593,7 @@ class OverlayWindow(QWidget):
                 painter.drawEllipse(rect)
 
             if is_selected:
-                painter.setPen(QPen(QColor("#00aaff"), 6))
+                painter.setPen(QPen(highlight_color, 6))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawEllipse(rect)
 
@@ -664,6 +675,7 @@ class OverlayWindow(QWidget):
         path = QPainterPath(); path.addRoundedRect(rect, 10, 10)
         is_active = mod_info.get('active', False) or mod_info.get('is_active_managed', False)
         is_selected = (index == self.selected_mod_index)
+        highlight_color = self.controller.manager.palette().color(self.controller.manager.palette().ColorRole.Highlight)
         painter.setBrush(QColor(40, 40, 40, 220)); painter.setPen(Qt.PenStyle.NoPen); painter.drawPath(path)
         if is_selected:
             normal_yellow = QColor("#FFD700")
@@ -673,7 +685,7 @@ class OverlayWindow(QWidget):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
         elif is_active:
-            painter.setPen(QPen(QColor("#00aaff"), 6))
+            painter.setPen(QPen(highlight_color, 6))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(path)
         icon_rect = QRectF(rect.x() + 10, rect.y() + 10, rect.width() - 20, rect.height() * 0.6)
@@ -869,8 +881,9 @@ class OverlayController(QObject):
 
     def show_welcome_message(self):
         if self.welcome_widget is None or not self.welcome_widget.isVisible():
-            self.welcome_widget = WelcomeMessageWidget(self.translator)
+            self.welcome_widget = WelcomeMessageWidget(self.translator, self.manager)
             self.welcome_widget.show()
+            QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
             QTimer.singleShot(50, lambda: force_focus(self.welcome_widget))
 
     def on_game_lost(self):
@@ -879,13 +892,6 @@ class OverlayController(QObject):
         if self.overlay_window:
             self.overlay_window.close()
             self.overlay_window = None
-
-    def show_welcome_message(self):
-        if self.welcome_widget is None or not self.welcome_widget.isVisible():
-            self.welcome_widget = WelcomeMessageWidget(self.translator)
-            self.welcome_widget.show()
-            QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
-            QTimer.singleShot(50, lambda: force_focus(self.welcome_widget))
 
     def update_and_save_active_mod(self, category, profile_name, new_mod_path):
         if not self.current_game: return
