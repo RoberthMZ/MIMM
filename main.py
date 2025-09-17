@@ -1171,7 +1171,7 @@ class ModManager(QMainWindow):
         profile_mods_widget = QWidget()
         self.setup_profile_mods_tab(profile_mods_widget, profile_name)
         main_tabs.addTab(profile_mods_widget, self.translator.translate("profile_mods_tab")) 
-        main_tabs.currentChanged.connect(self._reposition_add_mod_button)
+        main_tabs.currentChanged.connect(self._reposition_floating_buttons)
         profile_data = self.profiles[self.current_game][self.current_category].get(profile_name, {})
         category_data = self.game_data[self.current_game]['categories'][self.current_category]
         api_category_id = profile_data.get('category_id') or category_data.get('api_id')
@@ -1312,7 +1312,6 @@ class ModManager(QMainWindow):
         self.mods_list_widget.itemClicked.connect(lambda i: self.on_managed_mod_clicked(profile_name, i))
         self.mods_list_widget.setViewMode(QListView.ViewMode.IconMode); self.mods_list_widget.setResizeMode(QListView.ResizeMode.Adjust); self.mods_list_widget.setMovement(QListView.Movement.Static); self.mods_list_widget.setUniformItemSizes(False); self.mods_list_widget.setGridSize(QSize(290, 245))
         self.mods_list_widget.setStyleSheet("QListWidget { padding: 5px; border: none; outline: none; } QListWidget::item { outline: none; margin-top: 25px; margin-left: -4px;} QListWidget::item:hover { background-color: transparent; border: none; } QListWidget::item:selected { background-color: transparent; }")
-        self._setup_add_mod_button(self.mods_list_widget, lambda: self.import_managed_mod(profile_name))
         self.update_managed_mods_list(profile_name)
         return self.mod_search_bar, self.mods_list_widget
 
@@ -1330,27 +1329,36 @@ class ModManager(QMainWindow):
         self.mods_list_widget.itemClicked.connect(lambda i: self.on_direct_mod_clicked(profile_name, i))
         self.mods_list_widget.setViewMode(QListView.ViewMode.IconMode); self.mods_list_widget.setResizeMode(QListView.ResizeMode.Adjust); self.mods_list_widget.setMovement(QListView.Movement.Static); self.mods_list_widget.setUniformItemSizes(True); self.mods_list_widget.setGridSize(QSize(290, 245))
         self.mods_list_widget.setStyleSheet("QListWidget { padding: 5px; border: none; outline: none; } QListWidget::item { outline: none; margin-top: 25px; margin-left: -4px;} QListWidget::item:hover { background-color: transparent; border: none; } QListWidget::item:selected { background-color: transparent; }")
-        self._setup_add_mod_button(self.mods_list_widget, lambda: self.import_direct_mod(profile_name))
         self.update_direct_mods_list_cards(profile_name)
         return self.mod_search_bar, self.mods_list_widget
     
-    def _reposition_add_mod_button(self):
-        if not hasattr(self, 'add_mod_button'):
-            return
-        list_widget_size = self.mods_list_widget.size()
+    def _reposition_floating_buttons(self):
+        if not hasattr(self, 'add_mod_button') or not self.add_mod_button.parentWidget(): return
+        
+        parent_widget = self.add_mod_button.parentWidget()
+        list_widget_size = parent_widget.size()
         button_size = self.add_mod_button.size()
         margin_right = 20
         margin_bottom = 10
-        scrollbar = self.mods_list_widget.verticalScrollBar()
+        
+        scrollbar = parent_widget.verticalScrollBar()
         if scrollbar and scrollbar.isVisible():
             margin_right += scrollbar.width()
-        new_x = list_widget_size.width() - button_size.width() - margin_right
-        new_y = list_widget_size.height() - button_size.height() - margin_bottom
-        self.add_mod_button.move(new_x, new_y)
+            
+        add_btn_x = list_widget_size.width() - button_size.width() - margin_right
+        add_btn_y = list_widget_size.height() - button_size.height() - margin_bottom
+        self.add_mod_button.move(add_btn_x, add_btn_y)
+        
+        if hasattr(self, 'scan_mods_button') and self.scan_mods_button.isVisible():
+            scan_button_size = self.scan_mods_button.size()
+            spacing = 15
+            scan_btn_y = add_btn_y + (button_size.height() - scan_button_size.height()) // 2
+            scan_btn_x = add_btn_x - scan_button_size.width() - spacing
+            self.scan_mods_button.move(scan_btn_x, scan_btn_y)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._reposition_add_mod_button()
+        self._reposition_floating_buttons()
 
     def filter_mods_list(self):
         if not hasattr(self, 'mods_list_widget') or not hasattr(self, 'mod_search_bar'):
@@ -1801,15 +1809,25 @@ class ModManager(QMainWindow):
     def setup_profile_mods_tab(self, parent_widget, profile_name):
         layout = QVBoxLayout(parent_widget)
         layout.setContentsMargins(5, 5, 5, 5) 
+        
         category_type = self.category_widgets[self.current_category]['type']
-        if category_type == 'direct_management':
-            search_bar, mods_list = self.setup_direct_management_ui_cards(profile_name)
-        else:
+        is_managed_profile = category_type != 'direct_management'
+        
+        scan_callback = None
+        if is_managed_profile:
             search_bar, mods_list = self.setup_managed_mod_ui(profile_name)
+            add_callback = lambda: self.import_managed_mod(profile_name)
+            scan_callback = lambda: self.scan_and_register_untracked_mods(profile_name)
+        else:
+            search_bar, mods_list = self.setup_direct_management_ui_cards(profile_name)
+            add_callback = lambda: self.import_direct_mod(profile_name)
+            
         search_layout = QHBoxLayout()
         search_layout.addWidget(search_bar)
         layout.addLayout(search_layout)
         layout.addWidget(mods_list)
+        
+        self._setup_floating_buttons(mods_list, add_callback, scan_callback)
 
     def _install_direct_mod_from_api(self, profile_name, mod_data, archive_path):
         mod_folder_name = self._sanitize_filename(mod_data.get('_sName'))
@@ -2059,25 +2077,27 @@ class ModManager(QMainWindow):
         else:
             return QColor(Qt.GlobalColor.white)
 
-    def _setup_add_mod_button(self, parent_widget, press_callback):
+    def _setup_floating_buttons(self, parent_widget, add_callback, scan_callback=None):
         highlight_color = self.palette().color(QPalette.ColorRole.Highlight)
         icon_color = self._get_contrasting_icon_color(highlight_color)
-
         btn_size, icon_size = 75, 42
-        
+        scan_btn_size, scan_icon_size = 55, 30
+
         stylesheet = f"""
             QPushButton {{
-                background-color: {highlight_color.name()};
-                border: none;
-                border-radius: {btn_size // 2}px;
-                outline: none;
+                background-color: {highlight_color.name()}; border: none;
+                border-radius: {btn_size // 2}px; outline: none;
             }}
-            QPushButton:hover {{
-                background-color: {highlight_color.lighter(115).name()};
+            QPushButton:hover {{ background-color: {highlight_color.lighter(115).name()}; }}
+            QPushButton:pressed {{ background-color: {highlight_color.darker(115).name()}; }}
+        """
+        scan_stylesheet = f"""
+            QPushButton {{
+                background-color: {highlight_color.name()}; border: none;
+                border-radius: {scan_btn_size // 2}px; outline: none;
             }}
-            QPushButton:pressed {{
-                background-color: {highlight_color.darker(115).name()};
-            }}
+            QPushButton:hover {{ background-color: {highlight_color.lighter(115).name()}; }}
+            QPushButton:pressed {{ background-color: {highlight_color.darker(115).name()}; }}
         """
         
         self.add_mod_button = QPushButton(parent=parent_widget)
@@ -2087,9 +2107,24 @@ class ModManager(QMainWindow):
         self.add_mod_button.setIconSize(QSize(icon_size, icon_size))
         self.add_mod_button.setStyleSheet(stylesheet)
         self.add_mod_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.add_mod_button.clicked.connect(press_callback)
-        QTimer.singleShot(0, self._reposition_add_mod_button)
+        self.add_mod_button.clicked.connect(add_callback)
         self.add_mod_button.show()
+        
+        if hasattr(self, 'scan_mods_button'):
+            delattr(self, 'scan_mods_button')
+
+        if scan_callback:
+            self.scan_mods_button = QPushButton(parent=parent_widget)
+            self.scan_mods_button.setToolTip(self.translator.translate("tooltip_scan_unregistered_mods"))
+            self.scan_mods_button.setFixedSize(scan_btn_size, scan_btn_size)
+            self.scan_mods_button.setIcon(self._create_colored_icon(self.ICON_UPDATE, icon_color))
+            self.scan_mods_button.setIconSize(QSize(scan_icon_size, scan_icon_size))
+            self.scan_mods_button.setStyleSheet(scan_stylesheet)
+            self.scan_mods_button.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.scan_mods_button.clicked.connect(scan_callback)
+            self.scan_mods_button.show()
+
+        QTimer.singleShot(5, self._reposition_floating_buttons)
 
     def update_mod(self, profile_name, mod_info):
         original_mod_name = mod_info.get("name")
@@ -2264,6 +2299,71 @@ class ModManager(QMainWindow):
             finally:
                 if archive_path and os.path.exists(archive_path):
                     os.remove(archive_path)
+
+    def scan_and_register_untracked_mods(self, profile_name):
+        profile = self.profiles[self.current_game][self.current_category][profile_name]
+        category_type = self.category_widgets[self.current_category]['type']
+
+        if category_type == 'direct_management':
+            self.show_message("Función no aplicable", "Esta función solo está disponible para perfiles de gestión de mods (no gestión directa).")
+            return
+
+        profile_folder_name = profile['folder_name']
+        management_path = self.get_management_path(self.current_game)
+        scan_path = os.path.join(management_path, profile_folder_name)
+        
+        registered_folders = {mod.get('name') for mod in profile.get("mods", [])}
+
+        if not os.path.isdir(scan_path):
+            return
+            
+        untracked_folders = []
+        for item in os.listdir(scan_path):
+            item_path = os.path.join(scan_path, item)
+            if os.path.isdir(item_path) and item not in registered_folders:
+                untracked_folders.append(item)
+
+        if not untracked_folders:
+            self.show_message(self.translator.translate("sync_title"), self.translator.translate("sync_no_unregistered_mods"))
+            return
+
+        added_mods_count = 0
+        for mod_folder in untracked_folders:
+            info_dialog = ModInfoDialog(mod_info={"display_name": mod_folder.replace("_", " ")}, parent=self)
+            if not info_dialog.exec():
+                continue
+
+            details = info_dialog.get_details()
+            if not details["display_name"]:
+                details["display_name"] = mod_folder
+                
+            slot_id = len(profile.get("mods", [])) + 1
+            mod_dest_path = os.path.join(scan_path, mod_folder)
+            
+            for root, _, files in os.walk(mod_dest_path):
+                for file in files:
+                    if file.lower().endswith('.ini'):
+                        self._rewrite_ini_file(os.path.join(root, file), slot_id, profile_folder_name, mod_folder)
+
+            icon_path = self._copy_icon_to_cache(details['icon_source_path'], f"mod_{profile_name}_{mod_folder}")
+            
+            new_mod_info = {
+                "name": mod_folder,
+                "path": mod_dest_path,
+                "slot_id": slot_id,
+                "display_name": details["display_name"],
+                "creator": details["creator"],
+                "url": details["url"],
+                "icon": icon_path
+            }
+            profile["mods"].append(new_mod_info)
+            added_mods_count += 1
+            
+        if added_mods_count > 0:
+            self.save_profiles()
+            self.update_managed_mods_list(profile_name)
+            self._simulate_f10_press()
+            self.show_message(self.translator.translate("success_title"), self.translator.translate("sync_success_message", count=added_mods_count))
         
     def on_mod_state_changed_from_overlay(self, game, category, profile_name, mod_data):
         print(f"ModManager: Recibida señal de actualización desde el overlay para {profile_name}")
