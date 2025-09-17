@@ -194,7 +194,7 @@
     "info_about_title": "Acerca de",
     "info_modder_name": "XxR09xX",
     "info_real_name": "Roberth Monsalve",
-    "info_app_version": "MIMM - V-1.0",
+    "info_app_version": "MIMM - V-1.1",
     "info_thanks_message": "Quiero agradecer a la comunidad de modding de GameBanana, cuya creatividad y pasión hacen que un gestor como este sea posible, y a todos los que me apoyan en Patreon (cuando los haya 🥲).",
     "info_support_message": "¡Apoya mi trabajo para ayudarme a seguir ofreciendo actualizaciones y nuevas características!",
     "info_patreon_button": "Patreon",
@@ -237,5 +237,9 @@
     "title_install_error": "Error de Instalación",
     "welcome_title": "MIMM Overlay Activo",
     "welcome_text": "MIMM Overlay está activo.\nPulsa Alt+S o LB+LStick↓+B para abrir.",
-    "welcome_continue_prompt": "(Haz clic en cualquier lugar para continuar)"
+    "welcome_continue_prompt": "(Haz clic en cualquier lugar para continuar)",
+    "tooltip_scan_unregistered_mods": "Buscar mods no registrados en la carpeta del perfil",
+    "sync_title": "Sincronización",
+    "sync_no_unregistered_mods": "No se encontraron mods no registrados en la carpeta de este perfil.",
+    "sync_success_message": "Se han registrado {count} mod(s) nuevo(s) con éxito."
 }

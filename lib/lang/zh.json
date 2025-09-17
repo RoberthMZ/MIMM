@@ -194,7 +194,7 @@
     "info_about_title": "关于",
     "info_modder_name": "XxR09xX",
     "info_real_name": "Roberth Monsalve",
-    "info_app_version": "MIMM - V-1.0",
+    "info_app_version": "MIMM - V-1.1",
     "info_thanks_message": "我要感谢 GameBanana 模组社区，是他们的创造力和热情让这个管理器成为可能，也要感谢所有在 Patreon 上支持我的人（等有了之后 🥲）。",
     "info_support_message": "支持我的工作，帮助我继续提供更新和新功能！",
     "info_patreon_button": "Patreon",
@@ -237,5 +237,9 @@
     "title_install_error": "安装错误",
     "welcome_title": "MIMM 悬浮窗已激活",
     "welcome_text": "MIMM 悬浮窗已激活。\n按 Alt+S 或 LB+LStick↓+B 打开。",
-    "welcome_continue_prompt": "(点击任意位置继续)"
+    "welcome_continue_prompt": "(点击任意位置继续)",
+    "tooltip_scan_unregistered_mods": "在配置文件文件夹中扫描未注册的模组",
+    "sync_title": "同步",
+    "sync_no_unregistered_mods": "在此配置文件的文件夹中未找到未注册的模组。",
+    "sync_success_message": "已成功注册 {count} 个新模组。"
 }
