@@ -194,8 +194,8 @@
     "info_about_title": "Sobre",
     "info_modder_name": "XxR09xX",
     "info_real_name": "Roberth Monsalve",
-    "info_app_version": "MIMM - V-1.1",
-    "info_thanks_message": "Quero agradecer à comunidade de modding do GameBanana, cuja criatividade e paixão tornam um gerenciador como este possível, e a todos que me apoiam no Patreon (quando eu tiver algum 🥲).",
+    "info_app_version": "MIMM - V-1.2",
+    "info_thanks_message": "Quero agradecer à comunidade de modding do GameBanana, cuja criatividade e paixão tornam um gerenciador como este possível, e a todos que me apoiam no Patreon 🤩.",
     "info_support_message": "Apoie meu trabalho para me ajudar a continuar oferecendo atualizações e novos recursos!",
     "info_patreon_button": "Patreon",
     "info_footer_text": "Feito com ❤️ na Venezuela",
@@ -241,5 +241,14 @@
     "tooltip_scan_unregistered_mods": "Procurar mods não registrados na pasta do perfil",
     "sync_title": "Sincronização",
     "sync_no_unregistered_mods": "Nenhum mod não registrado foi encontrado na pasta deste perfil.",
-    "sync_success_message": "{count} novo(s) mod(s) foram registrados com sucesso."
+    "sync_success_message": "{count} novo(s) mod(s) foram registrados com sucesso.",
+    "add_all_profiles_tooltip": "Adicionar todos os perfis disponíveis",
+    "msg_add_all_not_supported": "Esta função está disponível apenas para as categorias Personagens e Bangboos",
+    "msg_confirm_add_all": "Deseja adicionar todos os perfis disponíveis para esta categoria? Isso pode demorar um pouco.",
+    "msg_add_all_success": "Adicionados {count} novos perfis com sucesso.",
+    "msg_add_all_none_added": "Nenhum novo perfil foi adicionado. É possível que todos já existam.",
+    "dnd_import_complete_title": "Importação Concluída",
+    "dnd_import_complete_message": "{count} mod(s) foram adicionados com sucesso ao perfil '{name}'.",
+    "dnd_import_error_title": "Erro de Importação",
+    "dnd_import_error_message": "Não foi possível importar '{name}':\n{e}"
 }

@@ -194,8 +194,8 @@
     "info_about_title": "关于",
     "info_modder_name": "XxR09xX",
     "info_real_name": "Roberth Monsalve",
-    "info_app_version": "MIMM - V-1.1",
-    "info_thanks_message": "我要感谢 GameBanana 模组社区，是他们的创造力和热情让这个管理器成为可能，也要感谢所有在 Patreon 上支持我的人（等有了之后 🥲）。",
+    "info_app_version": "MIMM - V-1.2",
+    "info_thanks_message": "我要感谢 GameBanana 模组社区，他们的创造力和热情让这个管理器成为可能，还要感谢所有在 Patreon 上支持我的人 🤩。",
     "info_support_message": "支持我的工作，帮助我继续提供更新和新功能！",
     "info_patreon_button": "Patreon",
     "info_footer_text": "用 ❤️ 在委内瑞拉制作",
@@ -241,5 +241,14 @@
     "tooltip_scan_unregistered_mods": "在配置文件文件夹中扫描未注册的模组",
     "sync_title": "同步",
     "sync_no_unregistered_mods": "在此配置文件的文件夹中未找到未注册的模组。",
-    "sync_success_message": "已成功注册 {count} 个新模组。"
+    "sync_success_message": "已成功注册 {count} 个新模组。",
+    "add_all_profiles_tooltip": "添加所有可用配置文件",
+    "msg_add_all_not_supported": "此功能仅适用于角色和Bangboos类别",
+    "msg_confirm_add_all": "您想为此类别添加所有可用的配置文件吗？这可能需要一些时间。",
+    "msg_add_all_success": "已成功添加 {count} 个新配置文件。",
+    "msg_add_all_none_added": "未添加任何新配置文件。可能所有配置文件都已存在。",
+    "dnd_import_complete_title": "导入完成",
+    "dnd_import_complete_message": "{count} 个mod已成功添加到配置文件 '{name}'。",
+    "dnd_import_error_title": "导入错误",
+    "dnd_import_error_message": "无法导入 '{name}'：\n{e}"
 }

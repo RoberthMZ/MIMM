@@ -194,8 +194,8 @@
     "info_about_title": "Acerca de",
     "info_modder_name": "XxR09xX",
     "info_real_name": "Roberth Monsalve",
-    "info_app_version": "MIMM - V-1.1",
-    "info_thanks_message": "Quiero agradecer a la comunidad de modding de GameBanana, cuya creatividad y pasión hacen que un gestor como este sea posible, y a todos los que me apoyan en Patreon (cuando los haya 🥲).",
+    "info_app_version": "MIMM - V-1.2",
+    "info_thanks_message": "Quiero agradecer a la comunidad de modding de GameBanana, cuya creatividad y pasión hacen que un gestor como este sea posible, y a todos los que me apoyan en Patreon 🤩.",
     "info_support_message": "¡Apoya mi trabajo para ayudarme a seguir ofreciendo actualizaciones y nuevas características!",
     "info_patreon_button": "Patreon",
     "info_footer_text": "Hecho con ❤️ en Venezuela",
@@ -241,5 +241,14 @@
     "tooltip_scan_unregistered_mods": "Buscar mods no registrados en la carpeta del perfil",
     "sync_title": "Sincronización",
     "sync_no_unregistered_mods": "No se encontraron mods no registrados en la carpeta de este perfil.",
-    "sync_success_message": "Se han registrado {count} mod(s) nuevo(s) con éxito."
+    "sync_success_message": "Se han registrado {count} mod(s) nuevo(s) con éxito.",
+    "add_all_profiles_tooltip": "Agregar todos los perfiles disponibles",
+    "msg_add_all_not_supported": "Esta función solo está disponible para las categorías Personajes y Bangboos",
+    "msg_confirm_add_all": "¿Desea agregar todos los perfiles disponibles para esta categoría? Esto podría tardar un momento.",
+    "msg_add_all_success": "Se agregaron {count} perfiles nuevos con éxito.",
+    "msg_add_all_none_added": "No se agregaron perfiles nuevos. Es posible que ya existan todos.",
+    "dnd_import_complete_title": "Importación Completa",
+    "dnd_import_complete_message": "{count} mod(s) han sido agregados exitosamente al perfil '{name}'.",
+    "dnd_import_error_title": "Error de Importación",
+    "dnd_import_error_message": "No se pudo importar '{name}':\n{e}"
 }
