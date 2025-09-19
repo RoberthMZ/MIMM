@@ -1,13 +1,13 @@
 import sys
 import os
-import winreg 
+import winreg
 import json
 import shutil
 import re
 import tempfile
 import time
 import base64
-import locale 
+import locale
 try:
     import requests
 except ImportError:
@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QFileDialog, QInputDialog, QMessageBox, QListWidgetItem,
     QDialog, QButtonGroup, QLineEdit, QListView, QStyle, QFrame, QSpacerItem, QSizePolicy, QStackedLayout, QSystemTrayIcon, QMenu
 )
-from PyQt6.QtCore import Qt, QSize, QRectF, QByteArray, pyqtSignal, QTimer, QPointF, QUrl, QEventLoop
+from PyQt6.QtCore import Qt, QSize, QRectF, QByteArray, pyqtSignal, QTimer, QPointF, QUrl, QEventLoop, QThread
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QBrush, QColor, QPalette, QPainterPath, QDesktopServices, QCursor, QPen, QFontMetrics, QAction
 from PyQt6.QtSvg import QSvgRenderer
 from lib.ui_dialogs import ProfileItemWidget, ProfileDialog, ApiSelectionDialog, ModInfoDialog
@@ -348,6 +348,54 @@ class NoneModCardWidget(QWidget):
                 new_style = re.sub(r'color:\s*#[0-9a-fA-F]+;', '', current_style)
                 widget.setStyleSheet(new_style)
 
+class IconSyncWorker(QThread):
+    def __init__(self, mod_manager_instance, parent=None):
+        super().__init__(parent)
+        self.mod_manager = mod_manager_instance
+
+    def run(self):
+        if not requests:
+            print("Módulo 'requests' no disponible. No se pueden sincronizar los íconos.")
+            return
+
+        print("Iniciando sincronización de íconos de juegos desde GitHub en segundo plano...")
+        headers = {'User-Agent': 'MIMM/1.0'}
+
+        for game_name, game_info in self.mod_manager.game_data.items():
+            short_name = game_info['short_name']
+            print(f"Procesando íconos para: {game_name} ({short_name})")
+
+            api_url = (
+                f"{self.mod_manager.GITHUB_API_BASE_URL}/{self.mod_manager.GITHUB_REPO_OWNER}/"
+                f"{self.mod_manager.GITHUB_REPO_NAME}/contents/{self.mod_manager.GITHUB_ICONS_PATH}/{short_name}"
+            )
+            
+            try:
+                response = requests.get(api_url, headers=headers, timeout=15)
+                response.raise_for_status()
+                files_data = response.json()
+                
+                if not isinstance(files_data, list):
+                    print(f"Respuesta inesperada de la API para la carpeta '{short_name}': {files_data.get('message')}")
+                    continue
+
+                for file_info in files_data:
+                    if file_info['type'] == 'file':
+                        file_name = file_info['name']
+                        download_url = file_info['download_url']
+                        local_icon_path = os.path.join(self.mod_manager.user_icons_path, short_name, file_name)
+                        
+                        if not os.path.exists(local_icon_path):
+                            print(f"El ícono '{file_name}' no existe localmente. Descargando...")
+                            self.mod_manager._download_icon(download_url, local_icon_path)
+
+            except requests.RequestException as e:
+                print(f"No se pudo conectar a la API de GitHub para '{short_name}': {e}. Se omitirá la sincronización para este juego.")
+            except Exception as e:
+                print(f"Ocurrió un error inesperado al procesar '{short_name}': {e}")
+        
+        print("Sincronización de íconos de juegos finalizada.")
+
 class ModManager(QMainWindow):
     ICON_ADD = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxsaW5lIHgxPSIxMiIgeTE9IjUiIHgyPSIxMiIgeTI9IjE5Ii8+PGxpbmUgeDE9IjUiIHkxPSIxMiIgeDI9IjE5IiB5Mj0iMTIiLz48L3N2Zz4="
     ICON_EDIT = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xMiAzSDVhMiAyIDAgMCAwLTIgMnYxNGEyIDIgMCAwIDAgMiAyaDE0YTIgMiAwIDAgMCAyLTJ2LTciLz48cGF0aCBkPSJNMTguMzcgMi42M2EyLjEyMSAyLjEyMSAwIDAgMSAzIDNMMTIgMTVsLTQgMSAxLTQgOS4zNy05LjM3eiIvPjwvc3ZnPg=="
@@ -359,6 +407,11 @@ class ModManager(QMainWindow):
     ICON_LIKE = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZHRoPSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xNCA5VjVhMyAzIDAgMCAwLTMtM2wtNCA5djExaDExLjI4YTIgMiAwIDAgMCAyLTEuN2wxLjM4LTlhMiAyIDAgMCAwLTItMi4zeiI+PC9wYXRoPjxwYXRoIGQ9Ik03IDIyaC0zYTIgMiAwIDAgMS0yLTJ2LTdhMiAyIDAgMCAxIDItMmgzIj48L3BhdGg+PC9zdmc+"
     ICON_DOWNLOAD = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZHRoPSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0yMSAxNXY0YTIgMiAwIDAgMS0yIDJINWEyIDIgMCAwIDEtMi0ydi00Ij48L3BhdGg+PHBvbHlsaW5lIHBvaW50cz0iNyAxMCAxMiAxNSAxNyAxMCI+PC9wb2x5bGluZT48bGluZSB4MT0iMTIiIHkxPSIxNSIgeDI9IjEyIiB5Mj0iMyI+PC9saW5lPjwvc3ZnPg=="
     ICON_VIEWS = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZHRoPSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxwYXRoIGQ9Ik0xIDEycy41LTggMTEtOCAxMSA4IDExIDgtLjUtOC0xMS04LTExIDgtMTEgOHoiPjwvcGF0aD48Y2lyY2xlIGN4PSIxMiIgY3k9IjEyIiByPSIzIj48L2NpcmNsZT48L3N2Zz4="
+    ICON_ADD_ALL = "PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZzh0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBmaWxsPSJub25lIiBzdHJva2U9ImN1cnJlbnRDb2xvciIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiPjxyZWN0IHg9IjMiIHk9IjMiIHdpZHRoPSI3IiBoZWlnaHQ9IjciPjwvcmVjdD48cmVjdCB4PSIxNCIgeT0iMyIgd2lkdGg9IjciIGhlaWdodD0iNyI+PC9yZWN0PjxyZWN0IHg9IjMiIHk9IjE0IiB3aWR0aD0iNyIgaGVpZ2h0PSI3Ij48L3JlY3Q+PGxpbmUgeDE9IjE3IiB5MT0iMTQiIHgyPSIxNyIgeTI9IjIxIj48L2xpbmU+PGxpbmUgeDE9IjE0IiB5MT0iMTcuNSIgeDI9IjIxIiB5Mj0iMTcuNSI+PC9saW5lPjwvc3ZnPg=="
+    GITHUB_API_BASE_URL = "https://api.github.com/repos"
+    GITHUB_REPO_OWNER = "RoberthMZ"
+    GITHUB_REPO_NAME = "MIMM"
+    GITHUB_ICONS_PATH = "icons"
 
     def __init__(self,  startup_url=None):
         super().__init__()
@@ -441,6 +494,7 @@ class ModManager(QMainWindow):
             os.makedirs(os.path.join(self.user_icons_path, game['short_name']), exist_ok=True)
         os.makedirs(os.path.join(self.user_icons_path, "Others"), exist_ok=True)
         os.makedirs(os.path.join(self.user_icons_path, "Games"), exist_ok=True)
+        self._sync_game_icons_from_github()
         self.profiles = self.load_profiles()
         self.current_game = ""
         self.current_category = None
@@ -479,6 +533,23 @@ class ModManager(QMainWindow):
         pixmap.loadFromData(qt_svg_data, 'svg')
         
         return QIcon(pixmap)
+    
+    def _download_icon(self, download_url, local_path):
+        try:
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            response_icon = requests.get(download_url, timeout=15)
+            response_icon.raise_for_status()
+            with open(local_path, 'wb') as f:
+                f.write(response_icon.content)
+            print(f"Icono descargado y guardado en: {local_path}")
+            return True
+        except requests.RequestException as e:
+            print(f"Error al descargar el ícono desde {download_url}: {e}")
+            return False
+
+    def _sync_game_icons_from_github(self):
+        self.icon_sync_thread = IconSyncWorker(self)
+        self.icon_sync_thread.start()
     
     def update_xxmi_path(self, new_path):
         if os.path.isdir(new_path):
@@ -521,6 +592,7 @@ class ModManager(QMainWindow):
         self.game_title_label.setText(self.translator.translate("select_game_title"))
         self.category_title_label.setText(self.translator.translate("categories_title"))
         self.add_profile_button.setToolTip(self.translator.translate("add_profile_tooltip"))
+        self.add_all_profiles_button.setToolTip(self.translator.translate("add_all_profiles_tooltip"))
         self.edit_profile_button.setToolTip(self.translator.translate("edit_profile_tooltip"))
         self.remove_profile_button.setToolTip(self.translator.translate("remove_profile_tooltip"))
         if self.current_game:
@@ -534,6 +606,7 @@ class ModManager(QMainWindow):
                 self.display_profile_mods(list_widget.currentItem())
 
     def setup_ui(self):
+        self.setAcceptDrops(True)
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_panel.setFixedWidth(371)
@@ -607,6 +680,10 @@ class ModManager(QMainWindow):
         self.add_profile_button.setToolTip(self.translator.translate("add_profile_tooltip"))
         self.add_profile_button.setIcon(self._create_colored_icon(self.ICON_ADD, highlight_color))
         self.add_profile_button.clicked.connect(self.add_profile)
+        self.add_all_profiles_button = QPushButton()
+        self.add_all_profiles_button.setToolTip(self.translator.translate("add_all_profiles_tooltip"))
+        self.add_all_profiles_button.setIcon(self._create_colored_icon(self.ICON_ADD_ALL, highlight_color))
+        self.add_all_profiles_button.clicked.connect(self.add_all_profiles)
         self.edit_profile_button = QPushButton()
         self.edit_profile_button.setToolTip(self.translator.translate("edit_profile_tooltip"))
         self.edit_profile_button.setIcon(self._create_colored_icon(self.ICON_EDIT, highlight_color))
@@ -615,7 +692,7 @@ class ModManager(QMainWindow):
         self.remove_profile_button.setToolTip(self.translator.translate("remove_profile_tooltip"))
         self.remove_profile_button.setIcon(self._create_colored_icon(self.ICON_REMOVE, highlight_color))
         self.remove_profile_button.clicked.connect(self.remove_profile)
-        for btn in [self.add_profile_button, self.edit_profile_button, self.remove_profile_button]:
+        for btn in [self.add_profile_button, self.edit_profile_button, self.remove_profile_button, self.add_all_profiles_button]:
             btn.setFixedSize(button_size, button_size)
             btn.setIconSize(QSize(icon_size, icon_size))
             btn.setStyleSheet(button_stylesheet)
@@ -625,6 +702,7 @@ class ModManager(QMainWindow):
         buttons_layout = QHBoxLayout()
         buttons_layout.addStretch()
         buttons_layout.addWidget(self.add_profile_button)
+        buttons_layout.addWidget(self.add_all_profiles_button)
         buttons_layout.addWidget(self.edit_profile_button)
         buttons_layout.addWidget(self.remove_profile_button)
         buttons_layout.addStretch()
@@ -632,6 +710,118 @@ class ModManager(QMainWindow):
         self.right_panel = QStackedWidget()
         self.layout.addWidget(left_panel)
         self.layout.addWidget(self.right_panel)
+
+    def dragEnterEvent(self, event):
+        if self.profile_list_stack.currentWidget() and self.profile_list_stack.currentWidget().currentItem():
+            if event.mimeData().hasUrls():
+                event.acceptProposedAction()
+                return
+        event.ignore()
+
+    def dropEvent(self, event):
+        list_widget = self.profile_list_stack.currentWidget()
+        current_item = list_widget.currentItem()
+        if not current_item:
+            event.ignore()
+            return
+            
+        profile_name = current_item.data(Qt.ItemDataRole.UserRole)
+        category_type = self.category_widgets[self.current_category]['type']
+        is_managed_profile = category_type != 'direct_management'
+
+        paths = [url.toLocalFile() for url in event.mimeData().urls()]
+        
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        mods_added_count = 0
+        try:
+            for path in paths:
+                if self._process_dropped_item_for_dnd(path, profile_name, is_managed_profile):
+                    mods_added_count += 1
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        if mods_added_count > 0:
+            self.save_profiles()
+            if is_managed_profile:
+                self.update_managed_mods_list(profile_name)
+            else:
+                self.update_direct_mods_list_cards(profile_name)
+            self._simulate_f10_press()
+            self.show_message(
+                self.translator.translate("dnd_import_complete_title"),
+                self.translator.translate("dnd_import_complete_message", count=mods_added_count, name=profile_name)
+            )
+
+    def _process_dropped_item_for_dnd(self, source_path, profile_name, is_managed):
+        if not os.path.exists(source_path):
+            return False
+
+        profile = self.profiles[self.current_game][self.current_category][profile_name]
+        is_archive = os.path.isfile(source_path) and any(source_path.lower().endswith(ext) for ext in ['.zip', '.rar', '.7z'])
+        is_folder = os.path.isdir(source_path)
+
+        if not is_archive and not is_folder:
+            return False
+            
+        base_name = os.path.basename(source_path)
+        mod_name = self._sanitize_filename(base_name.rsplit('.', 1)[0] if is_archive else base_name)
+
+        if any(m.get('name') == mod_name for m in profile.get("mods", [])):
+            print(f"Saltando mod duplicado: {mod_name}")
+            return False
+
+        info_dialog = ModInfoDialog(mod_info={"display_name": mod_name.replace("_", " ")}, parent=self)
+        if not info_dialog.exec():
+            return False
+        
+        details = info_dialog.get_details()
+        display_name = details["display_name"] or mod_name
+
+        try:
+            if is_managed:
+                profile_folder_name = profile['folder_name']
+                management_path = self.get_management_path(self.current_game)
+                mod_dest_path = os.path.join(management_path, profile_folder_name, mod_name)
+            else:
+                mods_path = self.get_game_mods_path(self.current_game)
+                mod_dest_path = os.path.join(mods_path, mod_name)
+
+            if is_archive:
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    patoolib.extract_archive(source_path, outdir=temp_dir)
+                    extracted_contents = os.listdir(temp_dir)
+                    source_mod_folder = temp_dir
+                    if len(extracted_contents) == 1 and os.path.isdir(os.path.join(temp_dir, extracted_contents[0])):
+                        source_mod_folder = os.path.join(temp_dir, extracted_contents[0])
+                    shutil.copytree(source_mod_folder, mod_dest_path)
+            else: 
+                shutil.copytree(source_path, mod_dest_path)
+            
+            icon_path = self._copy_icon_to_cache(details['icon_source_path'], f"mod_{profile_name}_{mod_name}")
+            
+            if is_managed:
+                slot_id = len(profile.get("mods", [])) + 1
+                for root, _, files in os.walk(mod_dest_path):
+                    for file in files:
+                        if file.lower().endswith('.ini'):
+                            self._rewrite_ini_file(os.path.join(root, file), slot_id, profile['folder_name'], mod_name)
+                
+                new_mod_info = {"name": mod_name, "path": mod_dest_path, "slot_id": slot_id, "display_name": display_name, "creator": details["creator"], "url": details["url"], "icon": icon_path}
+            else:
+                new_mod_info = {"name": mod_name, "folder_name": mod_name, "display_name": display_name, "creator": details["creator"], "url": details["url"], "icon": icon_path}
+            
+            profile["mods"].append(new_mod_info)
+            return True
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                self.translator.translate("dnd_import_error_title"),
+                self.translator.translate("dnd_import_error_message", name=base_name, e=e)
+            )
+            if 'mod_dest_path' in locals() and os.path.exists(mod_dest_path):
+                self._safe_remove_directory(mod_dest_path)
+            return False
 
     def find_xxmi_path(self):
         saved_path = self.config.get("xxmi_path")
@@ -852,6 +1042,60 @@ class ModManager(QMainWindow):
                 newly_created_profile_name = name
         if newly_created_profile_name:
             self.update_profile_list(select_profile_name=newly_created_profile_name)
+
+    def add_all_profiles(self):
+        if not self.current_game or not self.current_category:
+            return
+
+        category_type = self.category_widgets[self.current_category]['type']
+        if category_type != 'api':
+            self.show_message(
+                self.translator.translate("title_info"),
+                self.translator.translate("msg_add_all_not_supported")
+            )
+            return
+
+        question = self.translator.translate("msg_confirm_add_all")
+        reply = QMessageBox.question(self, self.translator.translate("title_confirm"), question,
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            api_id = self.game_data[self.current_game]['categories'][self.current_category]['id']
+            all_items = self.fetch_gamebanana_data(api_id)
+            if not all_items:
+                return
+
+            category_profiles = self.profiles.setdefault(self.current_game, {}).setdefault(self.current_category, {})
+            existing_names = set(category_profiles.keys())
+            added_count = 0
+
+            for item in all_items:
+                name = item.get('name')
+                if name and name not in existing_names:
+                    source_icon_path = item.get('icon_path')
+                    final_icon_path = self._copy_icon_to_cache(source_icon_path, name) if source_icon_path else None
+                    
+                    if self.create_managed_profile(name, final_icon_path, category_id=item.get('id'), update_ui=False):
+                        added_count += 1
+            
+            if added_count > 0:
+                self.save_profiles()
+                self.update_profile_list()
+                self.show_message(
+                    self.translator.translate("success_title"),
+                    self.translator.translate("msg_add_all_success", count=added_count)
+                )
+            else:
+                self.show_message(
+                    self.translator.translate("title_info"),
+                    self.translator.translate("msg_add_all_none_added")
+                )
+
+        finally:
+            QApplication.restoreOverrideCursor()
 
     def edit_profile(self):
         list_widget = self.profile_list_stack.currentWidget()
