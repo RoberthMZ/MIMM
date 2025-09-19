@@ -372,7 +372,7 @@ class DownloadTab(QWidget):
         search_icon = self.manager._create_colored_icon(self.manager.ICON_SEARCH, self.palette().color(QPalette.ColorRole.Text))
         self.search_bar.addAction(QAction(search_icon, "", self), QLineEdit.ActionPosition.LeadingPosition)
         self.search_bar.returnPressed.connect(self.on_filter_changed); self.search_bar.setStyleSheet(search_bar_stylesheet); controls_layout.addWidget(self.search_bar, 1)
-        self.nsfw_check = QCheckBox(); self.nsfw_check.stateChanged.connect(self.on_filter_changed); self.nsfw_check.setStyleSheet(checkbox_stylesheet); controls_layout.addWidget(self.nsfw_check); main_layout.addLayout(controls_layout)
+        self.nsfw_check = QCheckBox(); show_nsfw = self.manager.config.get('download_tab_show_nsfw', False); self.nsfw_check.setChecked(show_nsfw); self.nsfw_check.stateChanged.connect(self.on_filter_changed); self.nsfw_check.stateChanged.connect(self._save_nsfw_state); self.nsfw_check.setStyleSheet(checkbox_stylesheet); controls_layout.addWidget(self.nsfw_check); main_layout.addLayout(controls_layout)
         self.list_container = QWidget(); container_layout = QVBoxLayout(self.list_container); container_layout.setContentsMargins(0, 0, 0, 0)
         self.mods_list_widget = QListWidget(); self.mods_list_widget.setViewMode(QListView.ViewMode.IconMode); self.mods_list_widget.setResizeMode(QListView.ResizeMode.Adjust); self.mods_list_widget.setMovement(QListView.Movement.Static); self.mods_list_widget.setUniformItemSizes(True); self.mods_list_widget.setGridSize(QSize(295, 310)); self.mods_list_widget.setStyleSheet("QListWidget { border: none; outline: none; background-color: transparent; } QListWidget::item { border: none; } QListWidget::item:selected { background-color: transparent; }")
         container_layout.addWidget(self.mods_list_widget)
@@ -393,6 +393,10 @@ class DownloadTab(QWidget):
         if source is self.list_container and event.type() == QEvent.Type.Resize:
             self.main_loading_animation.recenter_in_parent()
         return super().eventFilter(source, event)
+    
+    def _save_nsfw_state(self):
+        self.manager.config['download_tab_show_nsfw'] = self.nsfw_check.isChecked()
+        self.manager.save_config()
     
     def _is_strictly_dark_grayscale(self, image):
         if image.isNull(): return False

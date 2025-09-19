@@ -232,25 +232,34 @@ class ActiveWindowMonitor(QObject):
             self.game_lost.emit()
 
 class WelcomeMessageWidget(QWidget):
-    def __init__(self, translator):
-        super().__init__()
-        self.translator = translator
-        self.setup_ui()
-
-    def setup_ui(self):
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.setGeometry(QApplication.primaryScreen().geometry())
-
     def __init__(self, translator, manager):
         super().__init__()
         self.translator = translator
         self.manager = manager
         self.setup_ui()
+
+    def setup_ui(self):
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.SplashScreen
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setGeometry(QApplication.primaryScreen().geometry())
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
+        try:
+            hwnd = int(self.winId())
+            win32api.mouse_event(win32con.MOUSEEVENTF_MOVE, 0, 0, 0, 0)
+            ctypes.windll.user32.SetForegroundWindow(hwnd)
+            ctypes.windll.user32.BringWindowToTop(hwnd)
+            self.raise_()
+            self.activateWindow()
+        except Exception as e:
+            self.activateWindow()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -270,11 +279,11 @@ class WelcomeMessageWidget(QWidget):
         accent_rect = QRectF(panel_x, panel_y, accent_width, panel_height)
         painter.setClipPath(main_panel_path)
         painter.fillRect(accent_rect, QColor(55, 55, 60, 255))
-        painter.setClipping(False) 
+        painter.setClipping(False)
         icon_center_x = panel_x + accent_width / 2
         icon_center_y = panel_y + accent_width / 2
         emphasis_color = self.manager.palette().color(self.manager.palette().ColorRole.Highlight)
-        painter.setPen(QPen(emphasis_color, 3)) 
+        painter.setPen(QPen(emphasis_color, 3))
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawEllipse(QPointF(icon_center_x, icon_center_y), 20, 20)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -286,7 +295,7 @@ class WelcomeMessageWidget(QWidget):
         content_width = panel_width - accent_width - 60
         title_font = QFont("Segoe UI", 24, QFont.Weight.Bold)
         painter.setFont(title_font)
-        painter.setPen(emphasis_color) 
+        painter.setPen(emphasis_color)
         title_rect = QRectF(content_x, panel_y + 30, content_width, 50)
         painter.drawText(title_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.translator.translate("welcome_title"))
         body_font = QFont("Segoe UI", 14)
@@ -301,6 +310,7 @@ class WelcomeMessageWidget(QWidget):
         painter.drawText(prompt_rect, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignBottom, self.translator.translate("welcome_continue_prompt"))
 
     def mousePressEvent(self, event):
+        QApplication.restoreOverrideCursor()
         self.close()
 
     def keyPressEvent(self, event):
@@ -309,8 +319,7 @@ class WelcomeMessageWidget(QWidget):
 
     def closeEvent(self, event):
         QApplication.restoreOverrideCursor()
-        super().closeEvent(event) 
-
+        super().closeEvent(event)
 
 class OverlayWindow(QWidget):
     def __init__(self, game_name, categorized_profiles, controller, translator, default_icon_path):
