@@ -46,6 +46,7 @@ from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
 from lib.download_tab import FileSelectionDialog, DownloadProgressDialog
 import re
 from lib.one_click_dialog import OneClickInstallDialog
+from collections import OrderedDict
 
 def resource_path(relative_path):
     try:
@@ -77,9 +78,10 @@ class SingleInstance:
         if last_error == winerror.ERROR_ALREADY_EXISTS:
             self.is_running = True
 
-    def __del__(self):
+    def release(self):
         if self.mutex:
             win32api.CloseHandle(self.mutex)
+            self.mutex = None
 
 class MarqueeLabel(QLabel):
     def __init__(self, text, parent=None):
@@ -413,8 +415,15 @@ class ModManager(QMainWindow):
     GITHUB_REPO_NAME = "MIMM"
     GITHUB_ICONS_PATH = "icons"
 
-    def __init__(self,  startup_url=None):
+    def __init__(self, startup_url=None):
         super().__init__()
+        self.config = {}
+        self.profiles = {}
+        self.translator = None
+        self.is_quitting = False
+        self.startup_url_to_process = startup_url
+
+    def initialize_application(self):
         self._ensure_protocol_is_registered()
         self.app_root_path = os.path.dirname(os.path.abspath(sys.argv[0]))
         translations_path = resource_path(os.path.join("lib", "lang"))
@@ -430,21 +439,15 @@ class ModManager(QMainWindow):
                 system_lang, _ = locale.getdefaultlocale()
                 lang_code = system_lang.split('_')[0].lower() 
                 
-                supported_languages = ['es', 'en', 'pt', 'zh']
+                supported_languages = ['es', 'en', 'pt', 'zh', 'ru']
                 if lang_code in supported_languages:
                     initial_lang = lang_code
-                    print(f"Idioma del sistema detectado y soportado: '{initial_lang}'")
                 else:
-                    initial_lang = 'en' 
-                    print(f"Idioma del sistema '{lang_code}' no soportado. Usando 'en' por defecto.")
-
-            except Exception as e:
-                print(f"No se pudo detectar el idioma del sistema: {e}. Usando 'en' por defecto.")
+                    initial_lang = 'en'
+            except Exception:
                 initial_lang = 'en'
-            
             self.config['language'] = initial_lang
             self.save_config()
-        
         else:
             initial_lang = self.config.get("language")
 
@@ -457,7 +460,7 @@ class ModManager(QMainWindow):
         self.management_folder_name = ".MIMM"
         self.root_namespace = "MIMM"
         self.game_data = {
-            "Genshin Impact": { "folder": "GIMI", "short_name": "GI", "game_id": 8552, "categories": {
+             "Genshin Impact": { "folder": "GIMI", "short_name": "GI", "game_id": 8552, "categories": {
                 "Personajes": {"t_key": "category_characters", "type": "api", "id": 18140},
                 "Armas": {"t_key": "category_weapons", "type": "manual_icon", "api_id": 18137},
                 "Otros": {"t_key": "category_others", "type": "direct_management", "api_id": 12526, "sub_categories": [
@@ -505,20 +508,21 @@ class ModManager(QMainWindow):
         self.setup_ui()
         self.overlay_controller = OverlayController(self, self.translator)
         self.overlay_controller.mod_state_changed_from_overlay.connect(self.on_mod_state_changed_from_overlay)
-        self.is_quitting = False
         self._setup_tray_icon()
         self.command_file_path = os.path.join(self.app_data_path, "mimm_command.lock")
         self.command_check_timer = QTimer(self)
         self.command_check_timer.timeout.connect(self._check_for_command_file)
         self.command_check_timer.start(1500) 
-        if not self.xxmi_path: self.show_path_error()
+        if not self.xxmi_path: 
+            self.show_path_error()
         else:
             first_game_button = self.game_button_group.buttons()[0]
             first_game_button.setChecked(True)
             self.on_game_button_clicked(first_game_button)
-        if startup_url:
-            print(f"ModManager inicializado con una URL: {startup_url}. Esperando para procesar...")
-            QTimer.singleShot(250, lambda: self.process_startup_url(startup_url))
+        
+        if self.startup_url_to_process:
+            print(f"ModManager inicializado con una URL: {self.startup_url_to_process}. Esperando para procesar...")
+            QTimer.singleShot(250, lambda: self.process_startup_url(self.startup_url_to_process))
 
     def _sanitize_filename(self, name): return re.sub(r'[\\/*?:"<>|]', "", name)
 
@@ -853,7 +857,7 @@ class ModManager(QMainWindow):
         if game_name and game_name != self.current_game: self.on_game_changed(game_name)
     
     def on_game_changed(self, game_name):
-        self.current_game = game_name; self.setup_nrmm_structure(game_name); self.update_category_ui(game_name)
+        self.current_game = game_name; self.setup_global_structure(game_name); self.update_category_ui(game_name)
 
     def on_category_button_clicked(self, button):
         category_key = button.property("category_key")
@@ -1194,10 +1198,81 @@ class ModManager(QMainWindow):
         try:
             profile_id = self._get_next_available_profile_id(self.current_game)
             os.makedirs(character_path, exist_ok=True)
-            ini_content = (f"; MIMM Config for: {name}\n" f"namespace = {self.root_namespace}\\{folder_name}\n\n" "[Constants]\n" "persist global $active_slot = 0\n" f"global $profile_id = {profile_id}\n\n" "[KeyMod]\n" f"condition = $profile_id == $\\{self.root_namespace}\\profile_manager\\active_profile_id\n" "key = VK_CLEAR VK_RETURN\n" "run = CommandListMod\n\n" "[CommandListMod]\n" "$active_slot = cursor_screen_x\n")
-            with open(os.path.join(character_path, "MIMM_Profile.ini"), "w") as f: f.write(ini_content)
+            total_slots = 0
+            ini_content = (
+                f"; MIMM Config for: {name}\n"
+                f"namespace = {self.root_namespace}\\{folder_name}\n\n"
+                "[Constants]\n"
+                "persist global $active_slot = 0\n"
+                f"global $profile_id = {profile_id}\n"
+                "persist global $saved_slot = -1\n"
+                f"global $total_slots = {total_slots}\n\n"
+                "[KeyMod]\n"
+                f"condition = $profile_id == $\\{self.root_namespace}\\profile_manager\\active_profile_id\n"
+                "key = VK_CLEAR VK_RETURN\n"
+                "run = CommandListMod\n\n"
+                "[CommandListMod]\n"
+                "$active_slot = cursor_screen_x\n"
+            )
+            mod_switching_block = (
+                f"\n[CommandListModNext]\n"
+                f"if time > $\\{self.root_namespace}\\profile_manager\\mimm_cooldown && $active == 1\n"
+                f"    $next_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot + 1\n"
+                f"    if $next_slot > $\\{self.root_namespace}\\{folder_name}\\total_slots\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = 0\n"
+                f"    else\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $next_slot\n"
+                f"    endif\n"
+                f"    $\\{self.root_namespace}\\profile_manager\\mimm_cooldown = time + 0.3\n"
+                f"endif\n\n"
+                f"[KeyModNext]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt e\n"
+                f"key = XB_LEFT_SHOULDER XB_RIGHT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListModNext\n\n"
+                f"[CommandListModPrev]\n"
+                f"if time > $\\{self.root_namespace}\\profile_manager\\mimm_cooldown && $active == 1\n"
+                f"    $prev_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot - 1\n"
+                f"    if $prev_slot < 0\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\total_slots\n"
+                f"    else\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $prev_slot\n"
+                f"    endif\n"
+                f"    $\\{self.root_namespace}\\profile_manager\\mimm_cooldown = time + 0.3\n"
+                f"endif\n\n"
+                f"[KeyModPrev]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt q\n"
+                f"key = XB_LEFT_SHOULDER XB_LEFT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListModPrev\n"
+            )
+            toggle_slot_block = (
+                f"\n[KeyModToggleSlot]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt w\n"
+                f"key = XB_LEFT_THUMB XB_RIGHT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListToggleSlot\n\n"
+                f"[CommandListToggleSlot]\n"
+                f"if $\\{self.root_namespace}\\{folder_name}\\saved_slot == -1\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\saved_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\active_slot = 0\n"
+                f"else\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\saved_slot\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\saved_slot = -1\n"
+                f"endif\n"
+            )
+            final_ini_content = ini_content + mod_switching_block + toggle_slot_block
+
+            with open(os.path.join(character_path, "MIMM_Profile.ini"), "w") as f:
+                f.write(final_ini_content)
             
-            self.profiles[self.current_game][self.current_category][name] = { "mods": [], "active_mod": None, "profile_id": profile_id, "folder_name": folder_name, "icon": icon_path, "category_id": category_id }
+            self.profiles[self.current_game][self.current_category][name] = {
+                "mods": [], "active_mod": None, "profile_id": profile_id,
+                "folder_name": folder_name, "icon": icon_path, "category_id": category_id
+            }
             
             self.save_profiles()
             if update_ui:
@@ -1207,6 +1282,86 @@ class ModManager(QMainWindow):
         except Exception as e:
             print(f"Error al crear perfil gestionado '{name}': {e}")
             return False
+        
+    def _rewrite_profile_ini(self, profile_name, profile_data):
+        try:
+            management_path = self.get_management_path(self.current_game)
+            folder_name = profile_data['folder_name']
+            profile_id = profile_data['profile_id']
+            ini_path = os.path.join(management_path, folder_name, "MIMM_Profile.ini")
+            total_slots = len(profile_data.get("mods", []))
+            ini_content = (
+                f"; MIMM Config for: {profile_name}\n"
+                f"namespace = {self.root_namespace}\\{folder_name}\n\n"
+                "[Constants]\n"
+                "persist global $active_slot = 0\n"
+                f"global $profile_id = {profile_id}\n"
+                "persist global $saved_slot = -1\n"
+                f"global $total_slots = {total_slots}\n\n"
+                "[KeyMod]\n"
+                f"condition = $profile_id == $\\{self.root_namespace}\\profile_manager\\active_profile_id\n"
+                "key = VK_CLEAR VK_RETURN\n"
+                "run = CommandListMod\n\n"
+                "[CommandListMod]\n"
+                "$active_slot = cursor_screen_x\n"
+            )
+            mod_switching_block = (
+                f"\n[CommandListModNext]\n"
+                f"if time > $\\{self.root_namespace}\\profile_manager\\mimm_cooldown && $active == 1\n"
+                f"    if $\\{self.root_namespace}\\{folder_name}\\active_slot == $\\{self.root_namespace}\\{folder_name}\\total_slots\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = 0\n"
+                f"    else\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot + 1\n"
+                f"    endif\n"
+                f"    $\\{self.root_namespace}\\profile_manager\\mimm_cooldown = time + 0.3\n"
+                f"endif\n\n"
+                f"[KeyModNext]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt e\n"
+                f"key = XB_LEFT_SHOULDER XB_RIGHT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListModNext\n\n"
+                f"[CommandListModPrev]\n"
+                f"if time > $\\{self.root_namespace}\\profile_manager\\mimm_cooldown && $active == 1\n"
+                f"    if $\\{self.root_namespace}\\{folder_name}\\active_slot == 0\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\total_slots\n"
+                f"    else\n"
+                f"        $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot - 1\n"
+                f"    endif\n"
+                f"    $\\{self.root_namespace}\\profile_manager\\mimm_cooldown = time + 0.3\n"
+                f"endif\n\n"
+                f"[KeyModPrev]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt q\n"
+                f"key = XB_LEFT_SHOULDER XB_LEFT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListModPrev\n"
+            )
+            
+            toggle_slot_block = (
+                f"\n[KeyModToggleSlot]\n"
+                f"condition = $\\{self.root_namespace}\\profile_manager\\active_profile_id == {profile_id}\n"
+                f"key = no_ctrl no_shift alt w\n"
+                f"key = XB_LEFT_THUMB XB_RIGHT_THUMB\n"
+                f"type = press\n"
+                f"run = CommandListToggleSlot\n\n"
+                f"[CommandListToggleSlot]\n"
+                f"if $\\{self.root_namespace}\\{folder_name}\\saved_slot == -1\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\saved_slot = $\\{self.root_namespace}\\{folder_name}\\active_slot\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\active_slot = 0\n"
+                f"else\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\active_slot = $\\{self.root_namespace}\\{folder_name}\\saved_slot\n"
+                f"    $\\{self.root_namespace}\\{folder_name}\\saved_slot = -1\n"
+                f"endif\n"
+            )
+            final_ini_content = ini_content + mod_switching_block + toggle_slot_block
+            with open(ini_path, "w") as f:
+                f.write(final_ini_content)
+            
+            print(f"Archivo .ini para '{profile_name}' actualizado con {total_slots} slots (lógica corregida).")
+
+        except Exception as e:
+            print(f"ERROR: No se pudo reescribir el .ini del perfil para '{profile_name}': {e}")
 
     def create_direct_profile(self, name, icon_path=None, update_ui=True):
         try:
@@ -1262,56 +1417,184 @@ class ModManager(QMainWindow):
         QTimer.singleShot(50, force_correct_category_and_profiles)
 
     def _rewrite_ini_file(self, ini_path, slot_id, character_folder_name, mod_folder_name):
+        profile_id = None
         try:
-            with open(ini_path, 'r', encoding='utf-8', errors='ignore') as f: content = f.read()
-        except FileNotFoundError: return
-        state_vars = set(re.findall(r'\[Key.*?^\s*(\$[a-zA-Z0-9_]+)\s*=', content, re.MULTILINE | re.IGNORECASE))
-        default_values = { match.group(1): match.group(0) for var in state_vars for match in re.finditer(r'^\s*(?:persist\s+global|global|persist)\s+(' + re.escape(var) + r')\s*=\s*.*?$', content, re.MULTILINE | re.IGNORECASE) }
-        mod_prefix = self._sanitize_filename(mod_folder_name) + '_'
-        for var in state_vars: content = re.sub(r'\b' + re.escape(var) + r'\b', f"${mod_prefix}{var[1:]}", content)
-        lines = content.splitlines(True)
-        sections, original_order, current_section = {}, [], 'global'
-        sections.setdefault('global', []); original_order.append('global')
-        for line in lines:
+            current_profiles = self.profiles[self.current_game][self.current_category]
+            profile_data = next(
+                (p for p in current_profiles.values() if p.get('folder_name') == character_folder_name),
+                None
+            )
+            if profile_data:
+                profile_id = profile_data.get('profile_id')
+        except (KeyError, AttributeError):
+            pass
+
+        try:
+            with open(ini_path, 'r', encoding='utf-8', errors='ignore') as f:
+                original_lines = f.readlines()
+        except FileNotFoundError:
+            return
+
+        cleaned_lines = []
+        for line in original_lines:
             stripped = line.strip()
-            if stripped.startswith('[') and stripped.endswith(']'):
-                current_section = stripped
-                if current_section not in sections: sections[current_section] = []; original_order.append(current_section)
-            else: sections.setdefault(current_section, []).append(line)
-        constants_section = '[Constants]'
-        if constants_section not in sections: sections[constants_section] = []; original_order.insert(0, constants_section)
-        sections[constants_section].insert(0, f"global $managed_slot_id = {slot_id}\n")
-        for var, declaration in default_values.items():
-            new_var = f"${mod_prefix}{var[1:]}"; new_declaration = declaration.replace(var, new_var)
-            sections[constants_section].append(new_declaration + "\n")
-        output = []
-        for section_name in original_order:
-            section_lines = sections[section_name]
-            if section_name != 'global': output.append(section_name + '\n')
-            s_lower = section_name.lower()
-            handling_line = None
-            new_section_lines = []
-            for line in section_lines:
-                if line.strip().lower() == 'handling = skip':
-                    handling_line = line  
+            if not stripped:
+                continue
+            if stripped.startswith(';'):
+                comment_content = stripped[1:].strip()
+                if not comment_content:
+                    continue
+            cleaned_lines.append(line)
+        
+        sections = OrderedDict()
+        current_section = 'global'
+        sections[current_section] = []
+        
+        profile_info_sections = ['[CommandListProfileInfo]', '[KeyShowProfile]', '[ResourceProfileInfo]']
+
+        for line in cleaned_lines:
+            stripped_line = line.strip()
+            if stripped_line.startswith('[') and stripped_line.endswith(']'):
+                if stripped_line in profile_info_sections:
+                    current_section = None 
                 else:
-                    new_section_lines.append(line) 
-            section_lines = new_section_lines 
-            if s_lower.startswith('[key'):
-                condition = f"condition = $managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot\n"
-                if any(l.strip().lower().startswith('condition') for l in section_lines):
-                    section_lines = [l.strip() + f" && ($managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot)\n" if l.strip().lower().startswith('condition') else l for l in section_lines]
-                else: section_lines.insert(0, condition)
-            excluded = s_lower.startswith(('[constants]', '[resource', '[customshader', '[commandlist', '[key'))
-            if not excluded:
-                output.append(f"if $managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot\n")
-                if handling_line:
-                    output.append(handling_line)
-                if "match_priority" not in ''.join(section_lines).lower(): output.append("match_priority = 0\n")
-            output.extend(section_lines)
-            if not excluded: output.append("endif\n")
-            output.append('\n')
-        with open(ini_path, 'w', encoding='utf-8', errors='ignore') as f: f.writelines(output)
+                    current_section = stripped_line
+                    if current_section not in sections:
+                        sections[current_section] = []
+            elif current_section:
+                sections[current_section].append(line)
+                
+        full_content_str = "".join(original_lines)
+        is_master_ini = any('master' in k.lower() for k in sections.keys()) or \
+                        any('merged mods' in l.lower() for l in sections.get('global', []))
+
+        constants_section = '[Constants]'
+        if constants_section not in sections:
+            sections[constants_section] = []
+            if 'global' in sections:
+                sections.move_to_end(constants_section, last=False)
+                sections.move_to_end('global', last=False)
+
+        sections[constants_section] = [l for l in sections[constants_section] if '$managed_slot_id' not in l]
+        sections[constants_section].insert(0, f"global $managed_slot_id = {slot_id}\n")
+        
+        if '$mod_enabled' not in full_content_str:
+            sections[constants_section].append("global persist $mod_enabled = 1\n")
+        
+        constants_content = "".join(sections.get(constants_section, []))
+        if '$object_detected' not in constants_content:
+            sections[constants_section].append("global persist $object_detected = 0\n")
+            
+            first_override = next((s for s in sections if s.lower().startswith(('[textureoverride', '[shaderoverride')) and any('hash' in l.lower() for l in sections[s])), None)
+            if first_override:
+                sections[first_override].insert(0, "$object_detected = 1\n")
+
+            present_section_key = next((s for s in sections if s.lower() == '[present]'), None)
+            if not present_section_key:
+                present_section_key = '[Present]'
+                sections[present_section_key] = []
+
+            object_reset_logic_signature = f"if $managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot"
+            if object_reset_logic_signature not in "".join(sections[present_section_key]):
+                reset_logic = [
+                    f"\n{object_reset_logic_signature}\n",
+                    "    if $object_detected\n",
+                    "        post $object_detected = 0\n",
+                    "    endif\n",
+                    "endif\n"
+                ]
+                sections[present_section_key].extend(reset_logic)
+
+        final_output = []
+        condition_wrapper = f"if $managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot"
+        wrapper_if_stripped = condition_wrapper.strip()
+
+        for section_name, section_lines in sections.items():
+            if section_name.lower() == 'global':
+                final_output.extend(section_lines)
+                continue
+            
+            final_output.append(f"\n{section_name}\n")
+            
+            s_lower = section_name.lower()
+            is_excluded = s_lower.startswith(('[constants]', '[resource'))
+
+            if is_excluded:
+                final_output.extend(section_lines)
+            elif s_lower.startswith('[key'):
+                repaired_lines = []
+                condition_added = False
+                key_condition = f"($managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot)"
+                for line in section_lines:
+                    if line.strip().lower().startswith('condition =') and key_condition not in line:
+                        repaired_lines.append(line.strip() + f" && {key_condition}\n")
+                        condition_added = True
+                    else:
+                        repaired_lines.append(line)
+                if not condition_added and not any(l.strip().lower().startswith('condition =') for l in repaired_lines):
+                    repaired_lines.insert(0, f"condition = {key_condition[1:-1]}\n")
+                final_output.extend(repaired_lines)
+            else:
+                current_lines = section_lines
+                while True:
+                    first_line_idx = next((i for i, l in enumerate(current_lines) if l.strip()), -1)
+                    last_line_idx = next((i for i in range(len(current_lines) - 1, -1, -1) if current_lines[i].strip()), -1)
+                    
+                    if (first_line_idx != -1 and
+                        current_lines[first_line_idx].strip() == wrapper_if_stripped and
+                        last_line_idx != -1 and
+                        current_lines[last_line_idx].strip().lower() == 'endif'):
+                        
+                        content = current_lines[first_line_idx + 1 : last_line_idx]
+                        unindented_content = []
+                        for line in content:
+                            if line.startswith('    '):
+                                unindented_content.append(line[4:])
+                            elif line.startswith('\t'):
+                                unindented_content.append(line[1:])
+                            else:
+                                unindented_content.append(line)
+                        current_lines = unindented_content
+                    else:
+                        break
+                
+                final_output.append(f"{condition_wrapper}\n")
+                for line in current_lines:
+                    final_output.append(f"    {line.lstrip()}")
+                final_output.append("endif\n")
+
+        mod_content_string = "".join(final_output)
+        cleaned_mod_content = mod_content_string.rstrip()
+        final_string_to_write = cleaned_mod_content
+
+        if not is_master_ini and profile_id is not None:
+            profile_info_block = f"""
+
+[CommandListProfileInfo]
+if $profileinfo == 0 && $active == 1
+    pre Resource\\ShaderFixes\\help.ini\\Notification = ResourceProfileInfo
+    pre run = CustomShader\\ShaderFixes\\help.ini\\FormatText
+    pre $\\ShaderFixes\\help.ini\\notification_timeout = time + 2.0
+    $\\{self.root_namespace}\\profile_manager\\active_profile_id = {profile_id}
+    $profileinfo = 1
+endif
+
+[KeyShowProfile]
+condition = $mod_enabled && ($managed_slot_id == $\\{self.root_namespace}\\{character_folder_name}\\active_slot) && $object_detected
+key = no_ctrl alt shift w
+key = XB_LEFT_THUMB XB_B
+type = press
+$profileinfo = 0
+run = CommandListProfileInfo
+
+[ResourceProfileInfo]
+type = Buffer
+data = "MIMM - {character_folder_name}"
+"""
+            final_string_to_write += profile_info_block
+
+        with open(ini_path, 'w', encoding='utf-8', errors='ignore') as f:
+            f.write(final_string_to_write.lstrip())
             
     def remove_profile(self):
         list_widget = self.profile_list_stack.currentWidget(); current_item = list_widget.currentItem()
@@ -1585,9 +1868,11 @@ class ModManager(QMainWindow):
         margin_right = 20
         margin_bottom = 10
         
-        scrollbar = parent_widget.verticalScrollBar()
-        if scrollbar and scrollbar.isVisible():
-            margin_right += scrollbar.width()
+        list_widget_for_scrollbar = parent_widget.findChild(QListWidget)
+        if list_widget_for_scrollbar:
+            scrollbar = list_widget_for_scrollbar.verticalScrollBar()
+            if scrollbar and scrollbar.isVisible():
+                margin_right += scrollbar.width()
             
         add_btn_x = list_widget_size.width() - button_size.width() - margin_right
         add_btn_y = list_widget_size.height() - button_size.height() - margin_bottom
@@ -1603,6 +1888,10 @@ class ModManager(QMainWindow):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._reposition_floating_buttons()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(10, self._reposition_floating_buttons)
 
     def filter_mods_list(self):
         if not hasattr(self, 'mods_list_widget') or not hasattr(self, 'mod_search_bar'):
@@ -1673,6 +1962,7 @@ class ModManager(QMainWindow):
                 "icon": icon_path
             }
             profile["mods"].append(new_mod_info)
+            self._rewrite_profile_ini(profile_name, profile)
             self.save_profiles()
             self.update_managed_mods_list(profile_name)
             self._simulate_f10_press() 
@@ -1788,7 +2078,7 @@ class ModManager(QMainWindow):
                     if file.lower().endswith('.ini'):
                         self._rewrite_ini_file(os.path.join(root, file), new_slot_id, profile['folder_name'], mod_folder_name)
             new_slot_id += 1
-
+        self._rewrite_profile_ini(profile_name, profile)
         self.save_profiles()
         self.update_managed_mods_list(profile_name)
         self._simulate_f10_press()
@@ -1853,7 +2143,7 @@ class ModManager(QMainWindow):
         win32api.keybd_event(VK_CLEAR, 0, 0, 0); win32api.keybd_event(VK_RETURN, 0, 0, 0); time.sleep(0.05)
         win32api.keybd_event(VK_RETURN, 0, win32con.KEYEVENTF_KEYUP, 0); win32api.keybd_event(VK_CLEAR, 0, win32con.KEYEVENTF_KEYUP, 0); time.sleep(0.05)
         win32api.SetCursorPos(original_pos)
-        print(f"Activado Grupo {profile_id}, Slot {slot_id}")
+        print(f"Activado Perfil {profile_id}, Slot {slot_id}")
         
     def get_game_mods_path(self, game): return os.path.join(self.xxmi_path, self.game_data[game]["folder"], "Mods")
     
@@ -2069,9 +2359,13 @@ class ModManager(QMainWindow):
         search_layout = QHBoxLayout()
         search_layout.addWidget(search_bar)
         layout.addLayout(search_layout)
-        layout.addWidget(mods_list)
-        
-        self._setup_floating_buttons(mods_list, add_callback, scan_callback)
+        mods_container = QFrame()
+        mods_container.setFrameShape(QFrame.Shape.NoFrame)
+        mods_container_layout = QVBoxLayout(mods_container)
+        mods_container_layout.setContentsMargins(0, 0, 0, 0)
+        mods_container_layout.addWidget(mods_list)
+        layout.addWidget(mods_container)
+        self._setup_floating_buttons(mods_container, add_callback, scan_callback)
 
     def _install_direct_mod_from_api(self, profile_name, mod_data, archive_path):
         mod_folder_name = self._sanitize_filename(mod_data.get('_sName'))
@@ -2154,6 +2448,7 @@ class ModManager(QMainWindow):
         }
         
         profile["mods"].append(new_mod_info)
+        self._rewrite_profile_ini(profile_name, profile)
         self.save_profiles()
         self.update_managed_mods_list(profile_name)
         self._simulate_f10_press()
@@ -2326,7 +2621,6 @@ class ModManager(QMainWindow):
         icon_color = self._get_contrasting_icon_color(highlight_color)
         btn_size, icon_size = 75, 42
         scan_btn_size, scan_icon_size = 55, 30
-
         stylesheet = f"""
             QPushButton {{
                 background-color: {highlight_color.name()}; border: none;
@@ -2343,7 +2637,6 @@ class ModManager(QMainWindow):
             QPushButton:hover {{ background-color: {highlight_color.lighter(115).name()}; }}
             QPushButton:pressed {{ background-color: {highlight_color.darker(115).name()}; }}
         """
-        
         self.add_mod_button = QPushButton(parent=parent_widget)
         self.add_mod_button.setToolTip(self.translator.translate("tooltip_import_new_mod"))
         self.add_mod_button.setFixedSize(btn_size, btn_size)
@@ -2353,7 +2646,7 @@ class ModManager(QMainWindow):
         self.add_mod_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.add_mod_button.clicked.connect(add_callback)
         self.add_mod_button.show()
-        
+
         if hasattr(self, 'scan_mods_button'):
             delattr(self, 'scan_mods_button')
 
@@ -2604,6 +2897,7 @@ class ModManager(QMainWindow):
             added_mods_count += 1
             
         if added_mods_count > 0:
+            self._rewrite_profile_ini(profile_name, profile)
             self.save_profiles()
             self.update_managed_mods_list(profile_name)
             self._simulate_f10_press()
@@ -2630,14 +2924,74 @@ class ModManager(QMainWindow):
         if not self.xxmi_path or game not in self.game_data: return None
         return os.path.join(self.get_game_mods_path(game), self.management_folder_name)
         
-    def setup_nrmm_structure(self, game):
+    def setup_global_structure(self, game):
         management_path = self.get_management_path(game)
         if not management_path: return
         os.makedirs(management_path, exist_ok=True)
         global_config_path = os.path.join(management_path, "MIMM_Global.ini")
         if not os.path.exists(global_config_path):
-            content = (f"; MIMM Global Config\n" f"namespace = {self.root_namespace}\\profile_manager\n\n" "[System]\n" "check_foreground_window = 0\n\n" "[Constants]\n" "persist global $active_profile_id = 0\n\n" "[KeyProfile]\n" "key = VK_CLEAR VK_SPACE\n" "run = CommandListProfile\n\n" "[CommandListProfile]\n" "$active_profile_id = cursor_screen_y\n")
+            content = (
+                f"; MIMM Global Config\n"
+                f"namespace = {self.root_namespace}\\profile_manager\n\n"
+                "[System]\n"
+                "check_foreground_window = 0\n\n"
+                "[Constants]\n"
+                "persist global $active_profile_id = 0\n"
+                "persist global $mimm_cooldown = 0\n\n"
+                "[KeyProfile]\n"
+                "key = VK_CLEAR VK_SPACE\n"
+                "run = CommandListProfile\n\n"
+                "[CommandListProfile]\n"
+                "$active_profile_id = cursor_screen_y\n"
+            )
             with open(global_config_path, "w") as f: f.write(content)
+
+    def _repair_global_ini(self, game):
+        management_path = self.get_management_path(game)
+        if not management_path:
+            print(f"ERROR: No se puede obtener la ruta de gestión para {game} para reparar el .ini global.")
+            return
+        os.makedirs(management_path, exist_ok=True)
+        global_config_path = os.path.join(management_path, "MIMM_Global.ini")
+        correct_content = (
+            f"; MIMM Global Config\n"
+            f"namespace = {self.root_namespace}\\profile_manager\n\n"
+            "[System]\n"
+            "check_foreground_window = 0\n\n"
+            "[Constants]\n"
+            "persist global $active_profile_id = 0\n"
+            "persist global $mimm_cooldown = 0\n\n"
+            "[KeyProfile]\n"
+            "key = VK_CLEAR VK_SPACE\n"
+            "run = CommandListProfile\n\n"
+            "[CommandListProfile]\n"
+            "$active_profile_id = cursor_screen_y\n"
+        )
+
+        needs_rewrite = False
+        if not os.path.exists(global_config_path):
+            print(f"MIMM_Global.ini para {game} no existe. Creando...")
+            needs_rewrite = True
+        else:
+            try:
+                with open(global_config_path, 'r') as f:
+                    current_content = f.read()
+                if "$mimm_cooldown" not in current_content or \
+                   "$active_profile_id" not in current_content or \
+                   "[KeyProfile]" not in current_content:
+                    print(f"MIMM_Global.ini para {game} está desactualizado. Reescribiendo...")
+                    needs_rewrite = True
+            except Exception as e:
+                print(f"No se pudo leer MIMM_Global.ini para {game}. Forzando reescritura. Error: {e}")
+                needs_rewrite = True
+
+        if needs_rewrite:
+            try:
+                with open(global_config_path, "w") as f:
+                    f.write(correct_content)
+                print(f"Se ha reparado MIMM_Global.ini para {game} con éxito.")
+            except Exception as e:
+                print(f"FATAL: No se pudo escribir el MIMM_Global.ini reparado para {game}. Error: {e}")
             
     def load_config(self):
         path = os.path.join(self.app_data_path, "config.json") 
@@ -2712,31 +3066,30 @@ class ModManager(QMainWindow):
             self.show_window_from_tray()
 
     def toggle_overlay_functionality(self, checked):
+        if not hasattr(self, 'overlay_controller') or self.overlay_controller is None:
+            self.overlay_controller = OverlayController(self, self.translator)
+            self.overlay_controller.mod_state_changed_from_overlay.connect(self.on_mod_state_changed_from_overlay)
         if checked:
-            if not hasattr(self, 'overlay_controller') or self.overlay_controller is None:
-                print("Iniciando funcionalidad del Overlay...")
-                self.overlay_controller = OverlayController(self, self.translator)
-                self.overlay_controller.mod_state_changed_from_overlay.connect(self.on_mod_state_changed_from_overlay)
+            self.overlay_controller.resume_listeners() 
         else:
-            if hasattr(self, 'overlay_controller') and self.overlay_controller is not None:
-                print("Deteniendo funcionalidad del Overlay...")
-
-                if hasattr(self.overlay_controller, 'key_listener') and self.overlay_controller.key_listener:
-                    self.overlay_controller.key_listener.stop()
-                if hasattr(self.overlay_controller, 'controller_listener') and self.overlay_controller.controller_listener:
-                    self.overlay_controller.controller_listener.stop()
-                self.overlay_controller = None
+            self.overlay_controller.pause_listeners()
 
     def quit_application(self):
         print("Saliendo de la aplicación...")
-        self.is_quitting = True 
+        if hasattr(self, 'icon_sync_thread') and self.icon_sync_thread.isRunning():
+            print("Deteniendo el hilo de sincronización de iconos...")
+            self.icon_sync_thread.quit()
+            self.icon_sync_thread.wait()
+            print("Hilo detenido.")
+        self.is_quitting = True
         self.close() 
 
     def closeEvent(self, event):
         if self.is_quitting:
+            self.config = self.load_config() 
             self.config['window_maximized'] = self.isMaximized()
             self.config['window_geometry'] = self.saveGeometry().toBase64().data().decode('utf-8')
-            self.save_config()
+            self.save_config() 
             self.tray_icon.hide()
             if hasattr(self, 'overlay_controller') and self.overlay_controller is not None:
                 if hasattr(self.overlay_controller, 'key_listener'):
@@ -2753,31 +3106,28 @@ class ModManager(QMainWindow):
             )
             event.ignore()
 
-if __name__ == '__main__':
+def start_application():
     app_data_path = os.path.join(os.getenv('APPDATA'), "MIMM")
     os.makedirs(app_data_path, exist_ok=True)
     command_file_path = os.path.join(app_data_path, "mimm_command.lock")
     startup_url = None
     if len(sys.argv) > 1 and sys.argv[1].strip().lower().startswith("mimm:"):
         startup_url = sys.argv[1].strip()
+    
     mutex_name = "MIMM_Global_Mutex_XxR09xX"
     instance = SingleInstance(name=mutex_name)
 
     if instance.is_running:
         if startup_url:
             try:
-                with open(command_file_path, 'w') as f:
-                    f.write(startup_url)
-                window_title = "Model Importer - Gestor de Mods"
+                with open(command_file_path, 'w') as f: f.write(startup_url)
+                window_title = "Model Importer Mod Manager" 
                 hwnd = win32gui.FindWindow(None, window_title)
                 if hwnd:
                     win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
                     win32gui.SetForegroundWindow(hwnd)
-            except Exception as e:
-                print(f"Error en la instancia mensajera: {e}")
-        sys.exit(0)
-    
-    app = QApplication(sys.argv)
+            except Exception as e: print(f"Error en la instancia mensajera: {e}")
+        return None, None
 
     missing_deps = []
     if not win32api: missing_deps.append("'pywin32'")
@@ -2790,15 +3140,4 @@ if __name__ == '__main__':
 
     QApplication.setQuitOnLastWindowClosed(False)
     manager = ModManager(startup_url=startup_url)
-
-    if "window_geometry" in manager.config:
-        geom_data = manager.config['window_geometry'].encode('utf-8')
-        manager.restoreGeometry(QByteArray.fromBase64(geom_data))
-
-    if not manager.config.get("start_minimized", False):
-        if manager.config.get("window_maximized", False):
-            manager.showMaximized()
-        else:
-            manager.show()
-        
-    sys.exit(app.exec())
+    return manager, instance
