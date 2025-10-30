@@ -561,16 +561,31 @@ class DownloadTab(QWidget):
     def _install_managed_mod_from_api(self, profile_name, mod_data, archive_path):
         mod_name = self.manager._sanitize_filename(mod_data.get('_sName'))
         profile = self.manager.profiles[self.manager.current_game][self.manager.current_category][profile_name]
-        if any(m.get('name') == mod_name for m in profile.get("mods", [])): raise FileExistsError(self.translator.translate("error_mod_exists_managed", name=mod_name))
-        profile_folder_name = profile['folder_name']; slot_id = len(profile.get("mods", [])) + 1
+        if any(m.get('name') == mod_name for m in profile.get("mods", [])): 
+            raise FileExistsError(self.translator.translate("error_mod_exists_managed", name=mod_name))
+        profile_folder_name = profile['folder_name']
+        slot_id = len(profile.get("mods", [])) + 1
         mod_dest_path = os.path.join(self.manager.get_management_path(self.manager.current_game), profile_folder_name, mod_name)
         self._extract_and_copy_mod(archive_path, mod_dest_path)
         for root, _, files in os.walk(mod_dest_path):
             for file in files:
-                if file.lower().endswith('.ini'): self.manager._rewrite_ini_file(os.path.join(root, file), slot_id, profile_folder_name, mod_name)
+                if file.lower().endswith('.ini'): 
+                    self.manager._rewrite_ini_file(os.path.join(root, file), slot_id, profile_folder_name, mod_name)
         icon_path = self._download_and_save_mod_icon(mod_data, profile_name, mod_name)
-        new_mod_info = {"name": mod_name, "path": mod_dest_path, "slot_id": slot_id, "display_name": mod_data.get('_sName'), "creator": mod_data.get('_aSubmitter', {}).get('_sName'), "url": mod_data.get('_sProfileUrl'), "profile_url": mod_data.get('_sProfileUrl'), "icon": icon_path}
-        profile["mods"].append(new_mod_info); self.manager.save_profiles(); self._simulate_f10_press()
+        new_mod_info = {
+            "name": mod_name, 
+            "path": mod_dest_path, 
+            "slot_id": slot_id, 
+            "display_name": mod_data.get('_sName'), 
+            "creator": mod_data.get('_aSubmitter', {}).get('_sName'), 
+            "url": mod_data.get('_sProfileUrl'), 
+            "profile_url": mod_data.get('_sProfileUrl'), 
+            "icon": icon_path
+        }
+        profile["mods"].append(new_mod_info)
+        self.manager._rewrite_profile_ini(profile_name, profile)
+        self.manager.save_profiles()
+        self._simulate_f10_press()
         return self.translator.translate("success_mod_installed", name=mod_name)
 
     def _simulate_f10_press(self):

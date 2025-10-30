@@ -1,4 +1,3 @@
-import sys
 import os
 import json
 import math
@@ -9,10 +8,12 @@ import win32con
 import win32gui
 import ctypes
 from ctypes import wintypes
+import base64
 from inputs import get_gamepad, UnpluggedError
 from PyQt6.QtWidgets import QApplication, QWidget, QMessageBox
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal, QObject, QPointF, QRectF, QRect
 from PyQt6.QtGui import QPainter, QPixmap, QColor, QPen, QBrush, QPainterPath, QFont, QFontMetrics, QLinearGradient, QImage
+from lib.icons_base64 import ICONS
 
 ACTIVATION_HOTKEY = "s"
 PROFILES_PER_PAGE = 10
@@ -29,16 +30,21 @@ GAME_FOLDERS = {
     "Wuthering Waves": "WWMI", "Zenless Zone Zero": "ZZMI",
 }
 
-VK_CODES = {"s": 0x53}
-MOD_ALT, MOD_NOREPEAT, WM_HOTKEY, HOTKEY_ID = 0x0001, 0x4000, 0x0312, 1
+VK_CODES = {
+    "s": 0x53, "q": 0x51, "w": 0x57, "e": 0x45,
+    "enter": 0x0D,
+    "clear": 0x0C,
+    "space": 0x20,
+}
+MOD_ALT, MOD_NOREPEAT, WM_HOTKEY = 0x0001, 0x4000, 0x0312
 
 def force_focus(window):
+    if window is None: return
     try:
         hwnd = int(window.winId())
         win32gui.SetForegroundWindow(hwnd)
         window.raise_()
         window.activateWindow()
-        print("Focus forced successfully using SetForegroundWindow.")
     except Exception as e:
         print(f"Focus force failed: {e}")
         window.activateWindow()
@@ -49,85 +55,106 @@ class ControllerListener(QObject):
     button_a = pyqtSignal()
     button_b = pyqtSignal()
     toggle_overlay_combo = pyqtSignal()
+    sync_combo_pressed = pyqtSignal() 
     bumper_pressed = pyqtSignal(int)
     trigger_pressed = pyqtSignal(int)
     joystick_y = pyqtSignal(int)
     joystick_x = pyqtSignal(int)
+    any_input_detected = pyqtSignal()
 
     def __init__(self, translator):
         super().__init__()
         self.translator = translator
         self.is_running = True
-        
-        self.BTN_SOUTH = 'BTN_SOUTH'; self.BTN_EAST = 'BTN_EAST'
-        self.BTN_TL = 'BTN_TL'; self.BTN_TR = 'BTN_TR'
-
-        self.l_bumper_held = False        
-        self.left_stick_up_held = False 
-        
-        self.left_trigger_active = False
-        self.right_trigger_active = False
-        self.joystick_x_active = False
+        self.BTN_SOUTH = 'BTN_SOUTH'
+        self.BTN_EAST = 'BTN_EAST'
+        self.BTN_TL = 'BTN_TL'
+        self.BTN_TR = 'BTN_TR'
+        self.BTN_THUMBL = 'BTN_THUMBL'
+        self.BTN_THUMBR = 'BTN_THUMBR'
+        self.l_bumper_held = False
+        self.r_bumper_held = False
+        self.l_thumb_held = False
+        self.r_thumb_held = False
+        self.left_stick_up_held = False
         self.joystick_y_active = False
+        self.joystick_x_active = False
         self.JOYSTICK_DEADZONE = 8192
+        self.TRIGGER_THRESHOLD = 128
+        self.lt_pressed = False
+        self.rt_pressed = False
 
     def run(self):
         print(self.translator.translate("log_controller_listener_start"))
         while self.is_running:
             try:
                 events = get_gamepad()
+                if events: self.any_input_detected.emit()
                 for event in events:
                     if not self.is_running: break
                     self.process_event(event)
             except UnpluggedError:
-                print(self.translator.translate("log_controller_unplugged")); time.sleep(5)
+                print(self.translator.translate("log_controller_unplugged"))
+                time.sleep(5)
             except Exception as e:
-                print(self.translator.translate("log_controller_error", error=e)); time.sleep(5)
+                print(self.translator.translate("log_controller_error", error=e))
+                time.sleep(5)
 
     def process_event(self, event):
         if event.ev_type == 'Absolute':
             if event.code == 'ABS_HAT0Y': self.dpad_y.emit(event.state)
             elif event.code == 'ABS_HAT0X': self.dpad_x.emit(event.state)
-            elif event.code == 'ABS_Z':
-                if event.state > 128 and not self.left_trigger_active: self.left_trigger_active = True; self.trigger_pressed.emit(-1)
-                elif event.state < 32: self.left_trigger_active = False
-            elif event.code == 'ABS_RZ':
-                if event.state > 128 and not self.right_trigger_active: self.right_trigger_active = True; self.trigger_pressed.emit(1)
-                elif event.state < 32: self.right_trigger_active = False
-            
             elif event.code == 'ABS_Y':
-                if event.state < -self.JOYSTICK_DEADZONE:
-                    self.left_stick_up_held = True
-                elif event.state >= -self.JOYSTICK_DEADZONE:
-                    self.left_stick_up_held = False
-                if event.state < -self.JOYSTICK_DEADZONE and not self.joystick_y_active: self.joystick_y_active = True; self.joystick_y.emit(-1)
-                elif event.state > self.JOYSTICK_DEADZONE and not self.joystick_y_active: self.joystick_y_active = True; self.joystick_y.emit(1)
+                self.left_stick_up_held = event.state < -self.JOYSTICK_DEADZONE
+                if self.left_stick_up_held and not self.joystick_y_active: self.joystick_y_active = True; self.joystick_y.emit(-1)
+                elif not self.left_stick_up_held and event.state > self.JOYSTICK_DEADZONE and not self.joystick_y_active: self.joystick_y_active = True; self.joystick_y.emit(1)
                 elif -self.JOYSTICK_DEADZONE < event.state < self.JOYSTICK_DEADZONE: self.joystick_y_active = False
-            
             elif event.code == 'ABS_X':
                 if event.state < -self.JOYSTICK_DEADZONE and not self.joystick_x_active: self.joystick_x_active = True; self.joystick_x.emit(-1)
                 elif event.state > self.JOYSTICK_DEADZONE and not self.joystick_x_active: self.joystick_x_active = True; self.joystick_x.emit(1)
                 elif -self.JOYSTICK_DEADZONE < event.state < self.JOYSTICK_DEADZONE: self.joystick_x_active = False
+            elif event.code == 'ABS_Z':
+                if event.state > self.TRIGGER_THRESHOLD and not self.lt_pressed:
+                    self.lt_pressed = True
+                    self.trigger_pressed.emit(-1)
+                elif event.state < self.TRIGGER_THRESHOLD:
+                    self.lt_pressed = False
+            elif event.code == 'ABS_RZ':
+                if event.state > self.TRIGGER_THRESHOLD and not self.rt_pressed:
+                    self.rt_pressed = True
+                    self.trigger_pressed.emit(1)
+                elif event.state < self.TRIGGER_THRESHOLD:
+                    self.rt_pressed = False
 
         elif event.ev_type == 'Key':
             is_pressed = (event.state == 1)
             if event.code == self.BTN_TL:
                 self.l_bumper_held = is_pressed
-            if event.code == self.BTN_EAST and is_pressed:
-                if self.l_bumper_held and self.left_stick_up_held:
-                    self.toggle_overlay_combo.emit()
-                    self.l_bumper_held = False
-                    self.left_stick_up_held = False
-                    return
-            if is_pressed:
-                if event.code == self.BTN_SOUTH: self.button_a.emit()
-                elif event.code == self.BTN_EAST: self.button_b.emit() 
-                elif event.code == self.BTN_TL: self.bumper_pressed.emit(-1) 
-                elif event.code == self.BTN_TR: self.bumper_pressed.emit(1)
-
-    def stop(self):
-        self.is_running = False
-        print(self.translator.translate("log_controller_listener_stop"))
+            elif event.code == self.BTN_TR:
+                self.r_bumper_held = is_pressed
+            elif event.code == self.BTN_THUMBL:
+                self.l_thumb_held = is_pressed
+            elif event.code == self.BTN_THUMBR:
+                self.r_thumb_held = is_pressed
+            if not is_pressed:
+                return
+            sync_combo_1 = self.l_bumper_held and (event.code == self.BTN_THUMBL or event.code == self.BTN_THUMBR)
+            sync_combo_2 = (self.l_thumb_held and event.code == self.BTN_THUMBR) or \
+                           (self.r_thumb_held and event.code == self.BTN_THUMBL)
+            if sync_combo_1 or sync_combo_2:
+                self.sync_combo_pressed.emit()
+                return
+            if self.l_bumper_held and event.code == self.BTN_EAST and self.left_stick_up_held:
+                self.toggle_overlay_combo.emit()
+                return
+            if event.code == self.BTN_SOUTH:
+                self.button_a.emit()
+            elif event.code == self.BTN_EAST:
+                self.button_b.emit()
+            elif event.code == self.BTN_TL:
+                self.bumper_pressed.emit(-1)
+            elif event.code == self.BTN_TR:
+                self.bumper_pressed.emit(1)
 
 class DataManager:
     def __init__(self, translator):
@@ -155,43 +182,55 @@ class DataManager:
             if profile_list:
                 categorized_profiles[category] = sorted(profile_list, key=lambda p: p.get('original_name'))
         return categorized_profiles
-    
+
     def save_profiles(self):
         try:
             with open(PROFILES_PATH, 'w', encoding='utf-8') as f:
                 json.dump(self.profiles, f, indent=4)
         except IOError as e:
             print(self.translator.translate("log_dm_save_error", error=e))
+            
+    def save_config(self):
+        try:
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=4)
+        except IOError as e:
+            print(self.translator.translate("log_config_save_error", error=e))
 
 class HotkeyListener(QObject):
-    activated = pyqtSignal()
+    hotkey_pressed = pyqtSignal(str)
 
     def __init__(self, translator):
         super().__init__()
         self.translator = translator
         self.is_running = True
         self.thread_id = None
+        self.id_to_key = {}
 
     def run(self):
         self.thread_id = threading.get_native_id()
-        vk_code = VK_CODES.get(ACTIVATION_HOTKEY.lower())
-        if not vk_code:
-            print(self.translator.translate("log_hotkey_invalid", key=ACTIVATION_HOTKEY))
-            return
+        hotkey_id_counter = 1
+        for key_name, vk_code in VK_CODES.items():
+            current_id = hotkey_id_counter
+            if not ctypes.windll.user32.RegisterHotKey(None, current_id, MOD_ALT | MOD_NOREPEAT, vk_code):
+                error_code = ctypes.windll.kernel32.GetLastError()
+                print(self.translator.translate("log_hotkey_register_error", key=key_name, code=error_code))
+            else:
+                print(self.translator.translate("log_hotkey_registered", key=f"Alt+{key_name.upper()}"))
+                self.id_to_key[current_id] = key_name
+            hotkey_id_counter += 1
 
-        if not ctypes.windll.user32.RegisterHotKey(None, HOTKEY_ID, MOD_ALT | MOD_NOREPEAT, vk_code):
-            error_code = ctypes.windll.kernel32.GetLastError()
-            print(self.translator.translate("log_hotkey_register_error", code=error_code))
-            return
-        
-        print(self.translator.translate("log_hotkey_registered", key=ACTIVATION_HOTKEY))
         try:
             msg = wintypes.MSG()
             while self.is_running and ctypes.windll.user32.GetMessageA(ctypes.byref(msg), None, 0, 0) != 0:
-                if msg.message == WM_HOTKEY and msg.wParam == HOTKEY_ID:
-                    self.activated.emit()
+                if msg.message == WM_HOTKEY:
+                    hotkey_id = msg.wParam
+                    if hotkey_id in self.id_to_key:
+                        key_name = self.id_to_key[hotkey_id]
+                        self.hotkey_pressed.emit(key_name)
         finally:
-            ctypes.windll.user32.UnregisterHotKey(None, HOTKEY_ID)
+            for hotkey_id in self.id_to_key.keys():
+                ctypes.windll.user32.UnregisterHotKey(None, hotkey_id)
             print(self.translator.translate("log_hotkey_unregistered"))
             
     def stop(self):
@@ -199,31 +238,53 @@ class HotkeyListener(QObject):
         if self.thread_id:
              ctypes.windll.user32.PostThreadMessageW(self.thread_id, win32con.WM_NULL, 0, 0)
 
+class ActionExecutorWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint |
+            Qt.WindowType.WindowStaysOnTopHint |
+            Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setGeometry(0, 0, 1, 1)
+
+    def showEvent(self, event):
+        force_focus(self)
+        super().showEvent(event)
+
 class ActiveWindowMonitor(QObject):
     game_detected = pyqtSignal(str)
     game_lost = pyqtSignal()
 
-    def __init__(self, translator, overlay_title):
+    def __init__(self, translator, overlay_title, controller):
         super().__init__()
         self.translator = translator
         self.overlay_title = overlay_title
+        self.controller = controller
         self.current_game = None
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.check_active_window)
-        self.timer.start(2000)
+        self.timer.start(1000)
 
     def check_active_window(self):
+        if self.controller.is_internal_action_active:
+            return
+
         found_game_name = None
         try:
             hwnd = win32gui.GetForegroundWindow()
             active_window_title = win32gui.GetWindowText(hwnd)
+            
             if active_window_title == self.overlay_title: return
+            
             if active_window_title:
                 for game_name, title_keyword in GAME_WINDOW_TITLES.items():
                     if title_keyword in active_window_title:
                         found_game_name = game_name
                         break
         except Exception: pass
+
         if found_game_name and self.current_game != found_game_name:
             self.current_game = found_game_name
             self.game_detected.emit(self.current_game)
@@ -258,7 +319,7 @@ class WelcomeMessageWidget(QWidget):
             ctypes.windll.user32.BringWindowToTop(hwnd)
             self.raise_()
             self.activateWindow()
-        except Exception as e:
+        except Exception:
             self.activateWindow()
 
     def paintEvent(self, event):
@@ -322,9 +383,12 @@ class WelcomeMessageWidget(QWidget):
         super().closeEvent(event)
 
 class OverlayWindow(QWidget):
-    def __init__(self, game_name, categorized_profiles, controller, translator, default_icon_path):
+    kbm_activity_detected = pyqtSignal()
+    
+    def __init__(self, game_name, categorized_profiles, controller, translator, default_icon_path, initial_input_device):
         super().__init__()
         self.game_name = game_name
+        self.GRID_SCROLL_SENSITIVITY_DIVISOR = 1
         self.categorized_profiles = categorized_profiles
         self.controller = controller
         self.translator = translator
@@ -332,13 +396,26 @@ class OverlayWindow(QWidget):
         self.game_data_structure = self.controller.manager.game_data
         game_categories_in_order = self.game_data_structure.get(self.game_name, {}).get('categories', {}).keys()
         self.categories = [cat for cat in game_categories_in_order if cat in self.categorized_profiles]
-        self.view_mode, self.current_category_index, self.current_page = 'profiles', 0, 0
-        self.total_pages, self.selected_profile_index, self.rotation_angle = 0, 0, 0.0
-        self.selected_profile_data, self.selected_profile_mods = None, []
-        self.mods_per_page, self.current_mod_page, self.total_mod_pages = 16, 0, 0
+        self.current_input_device = initial_input_device
+        self.nav_icons = {}
+        self.view_mode = 'profiles'
+        self.current_category_index = 0
+        self.current_page = 0
+        self.total_pages = 0
+        self.selected_profile_index = 0
+        self.rotation_angle = 0.0
+        self.selected_profile_data = None
+        self.selected_profile_mods = []
+        self.mods_per_page = 16
+        self.current_mod_page = 0
+        self.total_mod_pages = 0
         self.selected_mod_index = 0
-        self.mod_page_nav_rects, self.category_rects, self.profile_rects, self.nav_arrow_rects = {}, [], [], {}
+        self.mod_page_nav_rects = {}
+        self.category_rects = []
+        self.profile_rects = []
+        self.nav_arrow_rects = {}
         self.setup_ui()
+        self._load_icons()
         self._update_display_data()
 
     def setup_ui(self):
@@ -352,6 +429,29 @@ class OverlayWindow(QWidget):
         self.setGeometry(QApplication.primaryScreen().geometry())
         self.setMouseTracking(True)
 
+    def update_navigation_icons(self, device):
+        if self.current_input_device != device:
+            self.current_input_device = device
+            self._load_icons()
+            self.update()
+
+    def _load_icons(self):
+        self.nav_icons.clear()
+        icon_set = ICONS.get(self.current_input_device, ICONS['keyboard'])
+        print(f"--- Cargando set de iconos para: '{self.current_input_device}' ---")
+        for action, b64_data in icon_set.items():
+            try:
+                image_data = base64.b64decode(b64_data)
+                pixmap = QPixmap()
+                success = pixmap.loadFromData(image_data, 'PNG')
+                if success and not pixmap.isNull():
+                    self.nav_icons[action] = pixmap
+                    print(f"  - Ícono '{action}': Cargado con éxito.")
+                else:
+                    print(f"  - ERROR [libpng]: El ícono '{action}' no se pudo cargar. El pixmap es nulo.")
+            except Exception as e:
+                print(f"  - ERROR [decodificación]: El ícono '{action}' tiene datos Base64 inválidos. Error: {e}")
+
     def retranslate_ui(self):
         self.setWindowTitle(self.translator.translate("overlay_window_title"))
         self.update()
@@ -364,28 +464,17 @@ class OverlayWindow(QWidget):
         start, end = self.current_page * PROFILES_PER_PAGE, self.current_page * PROFILES_PER_PAGE + PROFILES_PER_PAGE
         self.profiles_on_page = profiles_in_cat[start:end]
         self.profiles_on_page.extend([{'type': 'empty'}] * (PROFILES_PER_PAGE - len(self.profiles_on_page)))
-        self.selected_profile_index, self.rotation_angle = 0, 0.0
+        self.selected_profile_index = 0
+        self.rotation_angle = 0.0
 
     def _simulate_f10_press(self):
         try:
-            win32api.keybd_event(0x79, 0, 0, 0); time.sleep(0.05)
+            win32api.keybd_event(0x79, 0, 0, 0)
+            time.sleep(0.05)
             win32api.keybd_event(0x79, 0, win32con.KEYEVENTF_KEYUP, 0)
             print(self.translator.translate("log_f10_simulated"))
         except Exception as e:
             print(self.translator.translate("log_f10_sim_error", error=e))
-
-    def _activate_mod(self, profile_id, slot_id):
-        try:
-            original_pos = win32gui.GetCursorPos()
-            win32api.SetCursorPos((slot_id, profile_id))
-            time.sleep(0.05); win32api.keybd_event(0x0C, 0, 0, 0); win32api.keybd_event(0x20, 0, 0, 0); time.sleep(0.05)
-            win32api.keybd_event(0x20, 0, win32con.KEYEVENTF_KEYUP, 0); win32api.keybd_event(0x0C, 0, win32con.KEYEVENTF_KEYUP, 0); time.sleep(0.05)
-            win32api.keybd_event(0x0C, 0, 0, 0); win32api.keybd_event(0x0D, 0, 0, 0); time.sleep(0.05)
-            win32api.keybd_event(0x0D, 0, win32con.KEYEVENTF_KEYUP, 0); win32api.keybd_event(0x0C, 0, win32con.KEYEVENTF_KEYUP, 0); time.sleep(0.05)
-            win32api.SetCursorPos(original_pos)
-            print(self.translator.translate("log_mod_activated", group=profile_id, slot=slot_id))
-        except Exception as e:
-            print(self.translator.translate("log_mod_activation_error", error=e))
 
     def change_category(self, direction):
         if self.view_mode != 'profiles' or not self.categories:
@@ -397,6 +486,7 @@ class OverlayWindow(QWidget):
         self.update()
 
     def handle_dpad_y(self, value):
+        if not self.isVisible(): return
         if value == 0: return
         if self.view_mode == 'profiles':
             self.change_page(value)
@@ -410,6 +500,7 @@ class OverlayWindow(QWidget):
                 self.update()
 
     def handle_dpad_x(self, value):
+        if not self.isVisible(): return
         if value == 0: return
         if self.view_mode == 'profiles':
             self.rotate_selection(value)
@@ -424,6 +515,7 @@ class OverlayWindow(QWidget):
                 self.update()
 
     def handle_button_a(self):
+        if not self.isVisible(): return
         if self.view_mode == 'profiles' and self.profiles_on_page[self.selected_profile_index].get('type') != 'empty':
             self.selected_profile_data = self.profiles_on_page[self.selected_profile_index]
             self.view_mode = 'mods'
@@ -434,6 +526,7 @@ class OverlayWindow(QWidget):
             self._trigger_mod_action(self.selected_mod_index)
 
     def handle_button_b(self):
+        if not self.isVisible(): return
         if self.view_mode == 'mods':
             self.view_mode, self.current_mod_page = 'profiles', 0
             self.update()
@@ -441,15 +534,18 @@ class OverlayWindow(QWidget):
             self.close()
 
     def handle_bumper_press(self, direction):
+        if not self.isVisible(): return
         if self.view_mode == 'profiles':
             self.change_page(direction)
         elif self.view_mode == 'mods':
             self.change_mod_page(direction)
 
     def handle_trigger_press(self, direction):
+        if not self.isVisible(): return
         self.change_category(direction)
 
     def handle_joystick_y(self, value):
+        if not self.isVisible(): return
         if value == 0:
             return
         if self.view_mode == 'profiles':
@@ -457,6 +553,7 @@ class OverlayWindow(QWidget):
         self.handle_dpad_y(-value)
 
     def handle_joystick_x(self, value):
+        if not self.isVisible(): return
         if value != 0:
             self.handle_dpad_x(value)
 
@@ -480,14 +577,75 @@ class OverlayWindow(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 150))
+
         if self.view_mode == 'profiles':
             self.draw_category_tabs(painter)
             self.draw_profile_circle(painter)
             self.draw_page_navigation(painter)
         elif self.view_mode == 'mods':
             self.draw_mods_view(painter)
+        self.draw_navigation_footer(painter)
+
+    def draw_navigation_footer(self, painter):
+        footer_height = 100
+        icon_height = 24
+        right_margin = 40
+        padding_icon_text = 10
+        spacing_items = 30
+
+        if self.view_mode == 'profiles':
+            actions = [
+                ('nav_wheel', "overlay_nav_profiles"),
+                ('cycle_mod', "overlay_nav_categories"),
+                ('nav_lr', "overlay_nav_pages"),
+                ('accept', "overlay_action_select"),
+                ('back', "overlay_action_close")
+            ]
+        elif self.view_mode == 'mods':
+            actions = [('nav_ud', "overlay_nav_mods"), ('nav_lr', "overlay_nav_pages_mods"), ('accept', "overlay_action_toggle"), ('back', "overlay_action_back")]
+        else:
+            return
+
+        painter.save()
+        painter.setPen(Qt.GlobalColor.white)
+        font = QFont("Segoe UI", 14)
+        painter.setFont(font)
+        fm = QFontMetrics(font)
+
+        item_widths = []
+        scaled_pixmaps = {}
+        for icon_key, text_key in actions:
+            pixmap = self.nav_icons.get(icon_key)
+            icon_width = 0
+            if pixmap and not pixmap.isNull():
+                scaled_pixmap = pixmap.scaledToHeight(icon_height, Qt.TransformationMode.SmoothTransformation)
+                scaled_pixmaps[icon_key] = scaled_pixmap
+                icon_width = scaled_pixmap.width()
+            
+            text = self.translator.translate(text_key)
+            text_width = fm.horizontalAdvance(text)
+            item_widths.append(icon_width + padding_icon_text + text_width)
+        
+        total_width = sum(item_widths) + spacing_items * (len(actions) - 1)
+        y = self.height() - footer_height
+        x = (self.width() - total_width) - right_margin
+
+        for i, (icon_key, text_key) in enumerate(actions):
+            scaled_pixmap = scaled_pixmaps.get(icon_key)
+            text = self.translator.translate(text_key)
+            current_item_x_offset = 0
+
+            if scaled_pixmap:
+                icon_y = y + (footer_height - scaled_pixmap.height()) / 2
+                painter.drawPixmap(int(x), int(icon_y), scaled_pixmap)
+                current_item_x_offset = scaled_pixmap.width() + padding_icon_text
+
+            text_y = y + (footer_height - fm.height()) / 2 + fm.ascent()
+            painter.drawText(int(x + current_item_x_offset), int(text_y), text)
+            x += item_widths[i] + spacing_items
+        painter.restore()
 
     def draw_category_tabs(self, painter):
         self.category_rects.clear()
@@ -519,44 +677,33 @@ class OverlayWindow(QWidget):
     def _is_strictly_dark_grayscale(self, image: QImage):
         if image.isNull():
             return False
-
         DARKNESS_THRESHOLD = 120
         COLOR_TOLERANCE = 15
-
         scaled_image = image.scaled(16, 16, Qt.AspectRatioMode.IgnoreAspectRatio)
-        
         has_visible_pixels = False
         for y in range(scaled_image.height()):
             for x in range(scaled_image.width()):
                 color = QColor(scaled_image.pixel(x, y))
-
                 if color.alpha() < 50: continue
                 has_visible_pixels = True
-
                 r, g, b = color.red(), color.green(), color.blue()
-                
                 if r > DARKNESS_THRESHOLD or g > DARKNESS_THRESHOLD or b > DARKNESS_THRESHOLD:
                     return False 
-                
                 min_c, max_c = min(r, g, b), max(r, g, b)
                 if (max_c - min_c) > COLOR_TOLERANCE:
                     return False 
-        
         return has_visible_pixels
 
     def _create_white_version(self, source_pixmap: QPixmap):
         if source_pixmap.isNull():
             return QPixmap()
-
         recolored_pixmap = QPixmap(source_pixmap.size())
         recolored_pixmap.fill(Qt.GlobalColor.transparent)
-
         painter = QPainter(recolored_pixmap)
         painter.drawPixmap(0, 0, source_pixmap)
         painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
         painter.fillRect(recolored_pixmap.rect(), QColor("#FFFFFF"))
         painter.end()
-        
         return recolored_pixmap
 
     def draw_profile_circle(self, painter: QPainter):
@@ -653,29 +800,46 @@ class OverlayWindow(QWidget):
 
     def update_data_and_refresh_view(self, new_categorized_profiles):
         self.categorized_profiles = new_categorized_profiles
-        if self.view_mode == 'profiles': self._update_display_data()
+        category_name = self.categories[self.current_category_index]
+        profiles_in_cat = self.categorized_profiles.get(category_name, [])
+        self.total_pages = math.ceil(len(profiles_in_cat) / PROFILES_PER_PAGE) if profiles_in_cat else 1
+        self.current_page = max(0, min(self.current_page, self.total_pages - 1))
+        start, end = self.current_page * PROFILES_PER_PAGE, self.current_page * PROFILES_PER_PAGE + PROFILES_PER_PAGE
+        self.profiles_on_page = profiles_in_cat[start:end]
+        self.profiles_on_page.extend([{'type': 'empty'}] * (PROFILES_PER_PAGE - len(self.profiles_on_page)))
+        if self.view_mode == 'profiles':
+            self.selected_profile_index = max(0, min(self.selected_profile_index, len(self.profiles_on_page) - 1))
         elif self.view_mode == 'mods' and self.selected_profile_data:
-            cat_name = self.categories[self.current_category_index]; profile_name = self.selected_profile_data.get('original_name')
-            updated_profile = next((p for p in self.categorized_profiles.get(cat_name, []) if p.get('original_name') == profile_name), None)
-            if updated_profile: self.selected_profile_data = updated_profile; self.prepare_mods_view()
-            else: self.view_mode = 'profiles'; self._update_display_data()
+            profile_name = self.selected_profile_data.get('original_name')
+            updated_profile = next((p for p in self.profiles_on_page if p.get('original_name') == profile_name), None)
+            if updated_profile:
+                self.selected_profile_data = updated_profile
+                self._set_initial_mods_page()
+                self.prepare_mods_view()
+            else:
+                self.view_mode = 'profiles'
         self.update()
 
     def _trigger_mod_action(self, index):
-        if not (0 <= index < len(self.selected_profile_mods)):
-            return
+        if not (0 <= index < len(self.selected_profile_mods)): return
         mod = self.selected_profile_mods[index]
-        if mod.get('type') == 'empty':
-            return
+        if mod.get('type') == 'empty': return
+        
         last_selected_index = self.selected_mod_index
         cat, name = self.categories[self.current_category_index], self.selected_profile_data['original_name']
+        
         if "slot_id" in mod:
             new_active_path = mod.get('path')
+            self.controller.activate_mod_from_overlay(
+                self.translator, 
+                self.selected_profile_data.get('profile_id', 0), 
+                mod.get('slot_id', 0)
+            )
             self.controller.update_and_save_active_mod(cat, name, new_active_path)
             self.selected_profile_data['active_mod'] = new_active_path
-            self._activate_mod(self.selected_profile_data.get('profile_id', 0), mod.get('slot_id', 0))
         elif self._toggle_direct_mod(mod):
             self.controller.update_and_save_direct_mod_status(cat, name, mod['folder_name'])
+        
         self.prepare_mods_view()
         self.selected_mod_index = last_selected_index
         self.update()
@@ -729,19 +893,33 @@ class OverlayWindow(QWidget):
         self.rotation_angle = -(360.0 / PROFILES_PER_PAGE) * self.selected_profile_index; self.update()
 
     def wheelEvent(self, event):
-        if self.view_mode == 'profiles': self.rotate_selection(1 if event.angleDelta().y() < 0 else -1)
+        self.kbm_activity_detected.emit()
+        if self.view_mode == 'profiles':
+            self.rotate_selection(1 if event.angleDelta().y() < 0 else -1)
 
     def mousePressEvent(self, event):
+        self.kbm_activity_detected.emit()
         if event.button() == Qt.MouseButton.RightButton:
-            if self.view_mode == 'mods': self.view_mode, self.current_mod_page = 'profiles', 0; self.update()
-            else: self.close()
+            if self.view_mode == 'mods':
+                self.view_mode = 'profiles'
+                self.current_mod_page = 0
+                self.update()
+            else:
+                self.close()
+            
         elif event.button() == Qt.MouseButton.LeftButton:
             if self.view_mode == 'profiles':
                 self.handle_profile_click(event.pos())
             elif self.view_mode == 'mods':
                 for direction, rect in self.mod_page_nav_rects.items():
-                    if rect.contains(event.pos()): self.change_mod_page(1 if direction == 'right' else -1); return
+                    if rect.contains(event.pos()):
+                        self.change_mod_page(1 if direction == 'right' else -1)
+                        return
                 self.handle_mod_click(event.pos())
+
+    def mouseMoveEvent(self, event):
+        self.kbm_activity_detected.emit()
+        super().mouseMoveEvent(event)
 
     def handle_profile_click(self, pos):
         for i, rect in enumerate(self.category_rects):
@@ -817,67 +995,103 @@ class OverlayWindow(QWidget):
                 return
 
     def keyPressEvent(self, event):
+        self.kbm_activity_detected.emit()
         key = event.key()
+
         if key == Qt.Key.Key_Escape:
-            self.handle_button_b()
-        elif self.view_mode == 'profiles':
+            if self.view_mode == 'mods':
+                self.handle_button_b()
+            else:
+                self.close()
+            return
+
+        if self.view_mode == 'profiles':
             if key == Qt.Key.Key_Left: self.rotate_selection(-1)
             elif key == Qt.Key.Key_Right: self.rotate_selection(1)
             elif key in (Qt.Key.Key_Up, Qt.Key.Key_A): self.change_page(-1)
             elif key in (Qt.Key.Key_Down, Qt.Key.Key_D): self.change_page(1)
             elif key == Qt.Key.Key_Q: self.change_category(-1)
             elif key == Qt.Key.Key_E: self.change_category(1)
-            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self.handle_button_a()
+            elif key in (Qt.Key.Key_Return, Qt.Key.Key_Enter): self.handle_button_a()
         elif self.view_mode == 'mods':
-            if key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_A):
-                self.change_mod_page(-1)
-            elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down, Qt.Key.Key_D):
-                self.change_mod_page(1)
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Up, Qt.Key.Key_A): self.change_mod_page(-1)
+            elif key in (Qt.Key.Key_Right, Qt.Key.Key_Down, Qt.Key.Key_D): self.change_mod_page(1)
 
 class OverlayController(QObject):
     mod_state_changed_from_overlay = pyqtSignal(str, str, str, object)
-    
+    input_device_changed = pyqtSignal(str)
+
     def __init__(self, manager, translator):
         super().__init__()
         self.manager = manager
         self.translator = translator
         self.data_manager = DataManager(translator)
-        self.overlay_window, self.current_game = None, None
-        
+        self.overlay_window = None
+        self.current_game = None
         self.welcome_message_shown = False
         self.welcome_widget = None
-
+        self.action_window = None
+        self.is_internal_action_active = False
+        self.last_input_device = 'keyboard'
+        self.first_run_setup_done = set()
+        self.sync_timer = QTimer(self)
+        self.sync_timer.setSingleShot(True)
+        self.sync_timer.timeout.connect(self.sync_overlay_with_ini_file)
+        
         if not self.data_manager.xxmi_path: 
             print(translator.translate("log_xxmi_path_not_found"))
             return
         
-        self.window_monitor = ActiveWindowMonitor(translator, translator.translate("overlay_window_title"))
+        if not self.data_manager.xxmi_path: 
+            print(translator.translate("log_xxmi_path_not_found"))
+            return
+        
+        self.window_monitor = ActiveWindowMonitor(translator, translator.translate("overlay_window_title"), self)
         self.window_monitor.game_detected.connect(self.on_game_detected)
         self.window_monitor.game_lost.connect(self.on_game_lost)
-        
         self.translator.language_changed.connect(self.on_language_changed)
         
         self.hotkey_thread = threading.Thread(target=self.setup_hotkey_listener, daemon=True)
         self.hotkey_thread.start()
-
         self.controller_thread = threading.Thread(target=self.setup_controller_listener, daemon=True)
         self.controller_thread.start()
 
+    def _simulate_f10_press(self):
+        try:
+            win32api.keybd_event(0x79, 0, 0, 0)
+            time.sleep(0.05)
+            win32api.keybd_event(0x79, 0, win32con.KEYEVENTF_KEYUP, 0)
+            print("Simulada pulsación de F10.")
+        except Exception as e:
+            print(f"No se pudo simular la pulsación de F10: {e}")
+
     def setup_controller_listener(self):
         self.controller_listener = ControllerListener(self.translator)
-        self.controller_listener.toggle_overlay_combo.connect(self.toggle_overlay)
+        self.controller_listener.any_input_detected.connect(self._report_controller_input)
+        self.controller_listener.toggle_overlay_combo.connect(self.on_toggle_overlay_combo)
+        self.controller_listener.sync_combo_pressed.connect(self.on_sync_combo_pressed)
         self.controller_listener.run()
 
-    def reload_profiles(self):
-        self.data_manager.refresh_data()
-        if self.overlay_window and self.overlay_window.isVisible():
+    def _set_input_device_to_controller(self):
+        if self.last_input_device != 'controller':
+            self.last_input_device = 'controller'
+            self.input_device_changed.emit('controller')
+            print("Input device changed to: Controller")
+
+    def on_toggle_overlay_combo(self):
+        self._set_input_device_to_controller()
+        self.toggle_overlay()
+
+    def reload_profiles(self, from_disk=True):
+        if from_disk:
+            self.data_manager.refresh_data()
+        if self.overlay_window:
             new_profiles = self.data_manager.get_categorized_profiles_for_game(self.current_game)
             self.overlay_window.update_data_and_refresh_view(new_profiles)
 
     def setup_hotkey_listener(self):
         self.key_listener = HotkeyListener(self.translator)
-        self.key_listener.activated.connect(self.toggle_overlay)
+        self.key_listener.hotkey_pressed.connect(self.on_hotkey_pressed)
         self.key_listener.run()
 
     def on_game_detected(self, game_name):
@@ -893,7 +1107,159 @@ class OverlayController(QObject):
             self.welcome_widget = WelcomeMessageWidget(self.translator, self.manager)
             self.welcome_widget.show()
             QApplication.setOverrideCursor(Qt.CursorShape.BlankCursor)
-            QTimer.singleShot(50, lambda: force_focus(self.welcome_widget))
+            QTimer.singleShot(50, lambda: force_focus(self.welcome_widget) if self.welcome_widget else None)
+
+    def on_hotkey_pressed(self, key):
+        if self.last_input_device != 'keyboard':
+            self.last_input_device = 'keyboard'
+            self.input_device_changed.emit('keyboard')
+            print("Input device changed to: Keyboard")
+        if key == 's':
+            self.toggle_overlay()
+        elif key in ('q', 'w', 'e'):
+            self.trigger_sync()
+
+    def on_sync_combo_pressed(self):
+        self._set_input_device_to_controller()
+        print("Sync combo detected from controller.")
+        self.trigger_sync()
+
+    def trigger_sync(self):
+        print("Sync triggered. Starting timer...")
+        self.sync_timer.start(1000)
+
+    def sync_overlay_with_ini_file(self):
+        if not self.current_game:
+            print(self.translator.translate("log_sync_no_game"))
+            return
+
+        game_folder = GAME_FOLDERS.get(self.current_game)
+        if not self.data_manager.xxmi_path or not game_folder:
+            print(self.translator.translate("log_sync_path_error"))
+            return
+
+        ini_path = os.path.join(self.data_manager.xxmi_path, game_folder, 'd3dx_user.ini')
+        
+        print(f"\n--- INICIANDO SINCRONIZACIÓN DESDE INI ---")
+        print(f"[DEPURACIÓN] Ruta del archivo INI: '{ini_path}'")
+
+        if not os.path.exists(ini_path):
+            print(self.translator.translate("log_sync_ini_not_found", path=ini_path))
+            return
+
+        active_profile_id = -1
+        active_profile_name = None
+        active_profile_category = None
+        
+        try:
+            print("[DEPURACIÓN] PASO 1: Buscando 'active_profile_id' global en el INI...")
+            with open(ini_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    clean_line = line.strip()
+                    if clean_line.startswith(r'$\mimm\profile_manager\active_profile_id'):
+                        active_profile_id = int(clean_line.split('=')[1].strip())
+                        print(f"[DEPURACIÓN] ID de perfil activo encontrado en INI: {active_profile_id}")
+                        break
+            
+            if active_profile_id == -1:
+                print(self.translator.translate("log_sync_vars_not_found"))
+                return
+            
+            print(f"[DEPURACIÓN] PASO 2: Buscando el perfil con ID {active_profile_id} en los datos JSON...")
+            game_profiles = self.data_manager.profiles.get(self.current_game, {})
+            profile_found_in_json = False
+            for category, profiles in game_profiles.items():
+                for name, data in profiles.items():
+                    if data.get('profile_id') == active_profile_id:
+                        active_profile_name = name
+                        active_profile_category = category
+                        profile_found_in_json = True
+                        print(f"[DEPURACIÓN] Perfil encontrado en JSON: Nombre='{active_profile_name}', Categoría='{active_profile_category}'")
+                        break
+                if profile_found_in_json:
+                    break
+            
+            if not active_profile_name:
+                print(self.translator.translate("log_sync_profile_not_found_in_json", profile_id=active_profile_id))
+                return
+
+            profile_key_in_ini = active_profile_name.lower()
+            slot_search_key = f"$\\mimm\\{profile_key_in_ini}\\active_slot"
+            print(f"[DEPURACIÓN] PASO 3: Buscando la clave específica '{slot_search_key}' en el INI...")
+            
+            active_slot_id = 0
+            with open(ini_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    clean_line = line.strip()
+                    if clean_line.startswith(slot_search_key):
+                        active_slot_id = int(clean_line.split('=')[1].strip())
+                        print(f"[DEPURACIÓN] Slot activo para '{active_profile_name}' encontrado. Valor: {active_slot_id}")
+                        break
+            print(f"[DEPURACIÓN] SINCRONIZACIÓN COMPLETA. Perfil: '{active_profile_name}' (ID {active_profile_id}), Slot Activo: {active_slot_id}")
+            profile_data = self.data_manager.profiles[self.current_game][active_profile_category][active_profile_name]
+            new_mod_path = None
+            if active_slot_id > 0:
+                for mod in profile_data.get('mods', []):
+                    if mod.get('slot_id') == active_slot_id:
+                        new_mod_path = mod.get('path')
+                        print(f"[DEPURACIÓN] El slot ID {active_slot_id} corresponde al mod: '{new_mod_path}'")
+                        break
+            
+            self.update_and_save_active_mod(active_profile_category, active_profile_name, new_mod_path)
+            self.reload_profiles(from_disk=False)
+            print("--- SINCRONIZACIÓN DESDE INI FINALIZADA --- \n")
+
+        except (IOError, ValueError, IndexError) as e:
+            print(self.translator.translate("log_sync_ini_read_error", error=e))
+
+    def activate_mod_from_overlay(self, translator, profile_id, slot_id):
+        print(translator.translate("log_mod_activated", group=profile_id, slot=slot_id))
+        
+        def execute_action():
+            self.is_internal_action_active = True
+            try:
+                original_pos = win32gui.GetCursorPos()
+                win32api.SetCursorPos((slot_id, profile_id))
+                time.sleep(0.05)
+                win32api.keybd_event(VK_CODES['clear'], 0, 0, 0)
+                win32api.keybd_event(VK_CODES['space'], 0, 0, 0)
+                time.sleep(0.05)
+                win32api.keybd_event(VK_CODES['space'], 0, win32con.KEYEVENTF_KEYUP, 0)
+                win32api.keybd_event(VK_CODES['clear'], 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.05)
+                win32api.keybd_event(VK_CODES['clear'], 0, 0, 0)
+                win32api.keybd_event(VK_CODES['enter'], 0, 0, 0)
+                time.sleep(0.05)
+                win32api.keybd_event(VK_CODES['enter'], 0, win32con.KEYEVENTF_KEYUP, 0)
+                win32api.keybd_event(VK_CODES['clear'], 0, win32con.KEYEVENTF_KEYUP, 0)
+                time.sleep(0.05)
+                win32api.SetCursorPos(original_pos)
+            except Exception as e:
+                print(translator.translate("log_mod_activation_error", error=e))
+            finally:
+                if self.action_window:
+                    self.action_window.close()
+                    self.action_window = None
+                QTimer.singleShot(100, self.clear_internal_action_flag)
+
+        self.action_window = ActionExecutorWindow()
+        self.action_window.show()
+        QTimer.singleShot(50, execute_action)
+    
+    def _report_keyboard_mouse_input(self):
+        if self.last_input_device != 'keyboard':
+            self.last_input_device = 'keyboard'
+            self.input_device_changed.emit('keyboard')
+            print("Input device switched to: Keyboard/Mouse")
+
+    def _report_controller_input(self):
+        if self.last_input_device != 'controller':
+            self.last_input_device = 'controller'
+            self.input_device_changed.emit('controller')
+            print("Input device switched to: Controller")
+
+    def clear_internal_action_flag(self):
+        self.is_internal_action_active = False
 
     def on_game_lost(self):
         print(self.translator.translate("log_game_lost"))
@@ -931,30 +1297,61 @@ class OverlayController(QObject):
         if self.overlay_window and self.overlay_window.isVisible():
             self.overlay_window.retranslate_ui()
 
+    def pause_listeners(self):
+        if hasattr(self, 'window_monitor'):
+            self.window_monitor.timer.stop()
+        print("Listeners del Overlay pausados.")
+
+    def resume_listeners(self):
+        if hasattr(self, 'window_monitor'):
+            self.window_monitor.timer.start(1000)
+        print("Listeners del Overlay reanudados.")
+
     def toggle_overlay(self):
         if self.welcome_widget and self.welcome_widget.isVisible():
             return
-            
-        if not self.current_game: print(self.translator.translate("log_overlay_no_game")); return
+        
+        if not self.current_game: 
+            print(self.translator.translate("log_overlay_no_game"))
+            return
+        
+        if self.current_game not in self.first_run_setup_done:
+            print(self.translator.translate("log_overlay_first_open_sync", game=self.current_game))
+            self.sync_overlay_with_ini_file()
+            self.first_run_setup_done.add(self.current_game)
+            if self.overlay_window:
+                try:
+                    if hasattr(self, 'controller_listener'):
+                        self.controller_listener.dpad_y.disconnect(self.overlay_window.handle_dpad_y)
+                        self.controller_listener.dpad_x.disconnect(self.overlay_window.handle_dpad_x)
+                except TypeError:
+                    pass
+                self.overlay_window.close()
+                self.overlay_window = None
+
         if self.overlay_window and self.overlay_window.isVisible():
-            self.overlay_window.close(); self.overlay_window = None
-        else:
+            self.overlay_window.close()
+            return
+
+        if not self.overlay_window:
+            print("Creando una nueva instancia de OverlayWindow...")
             profiles = self.data_manager.get_categorized_profiles_for_game(self.current_game)
-            if not profiles: print(self.translator.translate("log_overlay_no_profiles", game=self.current_game)); return
-            self.overlay_window = OverlayWindow(self.current_game, profiles, self, self.translator, self.manager.default_icon_path)
+            if not profiles: 
+                print(self.translator.translate("log_overlay_no_profiles", game=self.current_game))
+                return
+
+            self.overlay_window = OverlayWindow(
+                self.current_game, 
+                profiles, 
+                self, 
+                self.translator, 
+                self.manager.default_icon_path,
+                self.last_input_device
+            )
+            self.overlay_window.kbm_activity_detected.connect(self._report_keyboard_mouse_input)
+            self.input_device_changed.connect(self.overlay_window.update_navigation_icons)
             
             if hasattr(self, 'controller_listener'):
-                try:
-                    self.controller_listener.dpad_y.disconnect()
-                    self.controller_listener.dpad_x.disconnect()
-                    self.controller_listener.button_a.disconnect()
-                    self.controller_listener.button_b.disconnect()
-                    self.controller_listener.bumper_pressed.disconnect()
-                    self.controller_listener.trigger_pressed.disconnect()
-                    self.controller_listener.joystick_y.disconnect()
-                    self.controller_listener.joystick_x.disconnect()
-                except TypeError: pass
-
                 self.controller_listener.dpad_y.connect(self.overlay_window.handle_dpad_y)
                 self.controller_listener.dpad_x.connect(self.overlay_window.handle_dpad_x)
                 self.controller_listener.button_a.connect(self.overlay_window.handle_button_a)
@@ -964,5 +1361,5 @@ class OverlayController(QObject):
                 self.controller_listener.joystick_y.connect(self.overlay_window.handle_joystick_y)
                 self.controller_listener.joystick_x.connect(self.overlay_window.handle_joystick_x)
 
-            self.overlay_window.show()
-            QTimer.singleShot(50, lambda: force_focus(self.overlay_window))
+        self.overlay_window.show()
+        QTimer.singleShot(50, lambda: force_focus(self.overlay_window) if self.overlay_window else None)
